@@ -1,0 +1,21 @@
+# Assets and source code have separate licenses; see docs/assets.md.
+sapiens_body:
+  repo: facebook/sapiens-pretrain-1b-torchscript
+  revision: 565756fa30d04c440e5ff15066afc2ea0e647d3d
+  files: [sapiens_1b_epoch_173_torchscript.pt2]
+dino_motion:
+  repo: facebook/dinov3-vitl16-pretrain-lvd1689m
+  revision: ea8dc2863c51be0a264bab82070e3e8836b02d51
+  files: [config.json, preprocessor_config.json, model.safetensors]
+dino_face:
+  repo: facebook/dinov2-with-registers-large
+  revision: e4c89a4e05589de9b3e188688a303d0f3c04d0f3
+  files: [config.json, preprocessor_config.json, model.safetensors]
+lhm_500m:
+  repo: 3DAIGC/LHM-500M
+  revision: 7b9c7036404f9c21d8c4891ee4053e58c6ca2427
+  files: [config.json, model.safetensors]
+lhmpp_700m:
+  repo: 3DAIGC/LHMPP-700M
+  revision: fc9f73664b9bfcc457e96210ddc06fe7caf0d559
+  files: [config.json, configuration.json, model.safetensors]

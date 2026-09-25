@@ -1,0 +1,31 @@
+# Real-data CLI integration diagnostic, not a quality-training schedule.
+# Same model/features/geometry as neuman.yaml; short schedule and batch 2.
+seed: 2026
+data_root: /vast/projects/lingjie6/impossible/jungbinc/data/neuman/dataset
+manifest: /vast/projects/lingjie6/impossible/jungbinc/data/neuman/manifest-v2.json
+features: /vast/projects/lingjie6/impossible/jungbinc/features/neuman-v2
+smpl_model: /vast/projects/lingjie6/impossible/jungbinc/assets/smpl/SMPL_NEUTRAL.pkl
+smpl_pose_blend_shapes: false
+output: /vast/projects/lingjie6/impossible/jungbinc/runs/neuman-smoke-v1
+num_queries: 8192
+image_size: 512
+model:
+  width: 1024
+  depth: 5
+  heads: 16
+  decoder_width: 512
+  body_dim: 1536
+  face_dim: 1024
+  motion_dim: 1024
+  num_parts: 24
+  initial_scale: 0.008
+training:
+  updates: 8
+  effective_batch: 2
+  learning_rate: 0.0004
+  weight_decay: 0.0005
+  gradient_clip: 0.1
+  global_warmup: 2
+  validate_every: 4
+  checkpoint_every: 4
+  lpips_backbone: alex

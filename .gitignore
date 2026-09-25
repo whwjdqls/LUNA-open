@@ -1,0 +1,36 @@
+# Python environments and tooling
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+/build/
+/dist/
+.coverage
+/htmlcov/
+.ipynb_checkpoints/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Research assets and generated results
+/data/
+/datasets/
+/checkpoints/
+/pretrained_models/
+/outputs/
+/runs/
+/wandb/
+/logs/
+/cache/
+/assets/
+*.ckpt
+*.pt
+*.pth
+*.safetensors

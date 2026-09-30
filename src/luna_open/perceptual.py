@@ -17,7 +17,7 @@ ALEXNET_SHA256 = "7be5be791159472b1fbf3c69796f7cb30dca7ad8466c2df70058c37116cdee
 def verify_alexnet(path: Path) -> None:
     if not path.is_file():
         raise FileNotFoundError(
-            f"LPIPS backbone missing at {path}; run scripts/download_lpips.py on the login node"
+            f"LPIPS backbone missing at {path}; run scripts/download_lpips.py in an allocation"
         )
     if path.stat().st_size != ALEXNET_BYTES or file_sha256(path) != ALEXNET_SHA256:
         raise ValueError(f"LPIPS AlexNet backbone does not match the pinned weights: {path}")

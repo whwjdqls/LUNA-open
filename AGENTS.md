@@ -63,3 +63,27 @@ selected **SMPL instead of MHR** and **NeuMan first** (larger datasets are not y
 available). Preserve these decisions and label them as deviations. Document every
 material consideration and actual test result. Use Slurm allocations for heavy
 work; one-GPU smoke tests are authorized. Never report an unrun path as verified.
+
+## Server context
+
+- The current workspace is on **Yonsei**, at `/home/whwjdqls99/LUNA-open`.
+  Store this checkout's data, weights, caches, and outputs under
+  `/scratch2/whwjdqls99/LUNA-open`.
+- Yonsei has RTX 4090, RTX 3090, A6000, and RTX PRO 6000 GPUs. Inspect the
+  available Slurm partitions before selecting resources. Use `dell_cpu` with
+  `--qos=cpu_qos` for CPU acquisition checks. Do not assume PARCC
+  account/QoS/module names work here.
+- The user selected **one RTX 4090**, requested through `srun` inside `tmux`,
+  for local smoke tests and subsequent NeuMan training. Environment setup,
+  smoke tests, and training are authorized. Use `suma_rtx4090`, `base_qos`,
+  `--gres=gpu:RTX4090:1`; confirm the actual allocation before execution.
+- The user requires compute nodes for downloads, extraction, hashing, setup,
+  tests, feature preparation, and training. Use the login node only for editing,
+  lightweight inspection, and Slurm submission/monitoring.
+- Earlier experiments and other agents operate on **PARCC**, which has B200
+  GPUs and uses `/vast/...` storage. Historical results, job IDs, environments,
+  and feature caches in the existing logs belong to PARCC unless labeled Yonsei.
+- Keep server configurations and result records distinct. Do not transfer B200
+  execution/memory claims or its `TORCH_CUDA_ARCH_LIST=10.0` build setting to
+  Yonsei GPUs. Select the architecture for the actual allocated device.
+- See `docs/yonsei.md` for local acquisition status and configuration.

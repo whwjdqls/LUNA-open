@@ -28,6 +28,11 @@ def main():
     parser.add_argument("--split", choices=["val", "test"], default="test")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
+    parser.add_argument(
+        "--regional-l1",
+        action="store_true",
+        help="Also report foreground/background L1 without modifying predictions",
+    )
     args = parser.parse_args()
     verify_sources(args.root, json.loads(args.manifest.read_text()))
     model = build_lpips(device=args.device)
@@ -62,6 +67,11 @@ def main():
             sample["mask"][None].to(args.device),
             model,
         )
+        if args.regional_l1:
+            error = (prediction["rgb"] - sample["rgb"][None].to(args.device)).abs()
+            foreground = sample["mask"][None].to(args.device).expand_as(error)
+            for label, region in (("foreground_l1", foreground), ("background_l1", 1 - foreground)):
+                scores[label] = (error * region).sum((1, 2, 3)) / region.sum((1, 2, 3)).clamp_min(1)
         records.append(
             dict(scene=scene, frame=name, metrics={k: float(v[0]) for k, v in scores.items()})
         )
@@ -69,6 +79,10 @@ def main():
     result.update(
         method=method, split=args.split, metric_protocol="512-square white human crop; LPIPS-Alex"
     )
+    if args.regional_l1:
+        result["regional_l1_protocol"] = (
+            "RGB absolute error weighted by target foreground/background masks; predictions unchanged"
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result["mean_over_scenes"], indent=2))

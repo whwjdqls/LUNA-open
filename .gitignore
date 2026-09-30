@@ -1,10 +1,10 @@
 # Python environments and tooling
-__pycache__/
+__pycache__
 *.py[cod]
 .venv/
 venv/
-.pytest_cache/
-.ruff_cache/
+.pytest_cache
+.ruff_cache
 .mypy_cache/
 *.egg-info/
 /build/

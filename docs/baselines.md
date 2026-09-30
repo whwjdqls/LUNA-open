@@ -1,16 +1,35 @@
 # Baselines and inference integration
 
-## Acquired, not yet benchmarked
+**Canonical display correction:** the original shared-camera panels mixed SMPL
+and SMPL-X pelvis origins. See the [alignment investigation](alignment-investigation.md)
+for corrected views, recalculated alignment/pose/canvas metrics and Table 1 scope.
+The original posed benchmark already used fitted translations; its scores are
+unchanged by the display correction. Test-RGB pose/image fits are diagnostics.
 
-LHM and LHM++ source checkouts and pinned model checkpoints are present in
-project storage. Native inference dependencies/body assets, SMPL-to-SMPL-X fit
-conversion, and adapters are still required. No baseline score is reported.
+The completed Yonsei LHM-500M evaluation is recorded in
+[LHM evaluation on NeuMan](lhm-neuman-evaluation.md). It includes exact assets,
+camera handling, body conversion, environment and measured execution status.
+
+## Execution status
+
+LHM-500M has been evaluated on all 41 official NeuMan test frames using audited
+SMPL-to-SMPL-X fits and native reconstruction/skinning. Scene-mean L1 is 0.024574
+and LPIPS is 0.094337. Our validation-selected identity update 14,750 achieves
+L1 0.016576 and LPIPS 0.053251, with four references and local NeuMan training.
+Both use the supplied segmentation masks for preprocessing and test cropping.
+See the linked evaluation record for all metrics, limitations and the download.
+
+LHM++-700M with its native DPT renderer has now completed the same 41 test
+frames, using the same four references as ours. Scene-mean PSNR is 19.7052 dB,
+L1 0.022649 and LPIPS 0.078863. See the
+[LHM++ evaluation record](lhmpp-neuman-evaluation.md) for all seven metrics,
+square-input/DPT-canvas adaptations, strict checkpoint loading and final media.
 
 - LHM-500M takes the first of our four fixed training references.
 - LHM++-700M takes all four. Preserve its released neural renderer and identify
   that renderer in the result table. Do not call its features an RGB Gaussian
   export, and do not use pending PixelShuffle checkpoint names.
-- Our teacher will be an annotation-driven diagnostic after identity training.
+- Our identity comparison uses the annotation-driven SMPL/LBS teacher.
 - Our animator consumes driving RGB. Native fitted-pose baselines receive pose
   information through their supported body models; report this input difference.
 
@@ -32,7 +51,8 @@ documented. Its default eight-reference/1036x616 benchmark is a different protoc
 ### Upstream integration findings
 
 Inspected at the source pins in [assets.md](assets.md); the following are adapter
-requirements, not claims that native inference has run:
+requirements. Both native implementations have now been exercised as recorded
+in their evaluation records; the observations motivating the adapters follow:
 
 - LHM's `ModelHumanLRMSapdinoBodyHeadSD3_5.animation_infer` in
   `LHM/models/modeling_human_lrm.py` computes output height/width as twice the
@@ -45,8 +65,8 @@ requirements, not claims that native inference has run:
   around the helper. The legacy symmetric-FoV renderer needs its own verification.
 - LHM++ also derives dimensions from intrinsics in
   `core/models/modeling_humana4o_lrm.py::animation_infer`; some crop paths supply
-  separate dimensions. Its adapter must verify the actual chosen path and retain
-  the released neural rendering stages.
+  separate dimensions. Our adapter calls its explicit-dimension native renderer
+  and preserves DPT; the off-center point/camera check passed before full scoring.
 - LHM's requirements pin Torch 2.3, torchvision 0.18, gsplat 1.4 and xformers
   0.0.26.post1. These are not installed into our modern B200 environment.
   `GSPlatRenderer` inherits a module importing `diff_gaussian_rasterization`, so
@@ -55,9 +75,9 @@ requirements, not claims that native inference has run:
   assets remain separate requirements. Our SMPL annotation export does not
   supply them. Conversion quality must be checked before scoring these baselines.
 
-An isolated baseline environment and any narrowly scoped compatibility patches
-must be recorded with the final baseline run. Until these steps pass, only
-source/checkpoint acquisition and the common evaluation protocol are complete.
+The isolated baseline environments and compatibility changes are recorded with
+each final run. Source/checkpoint acquisition, geometry checks, native inference
+and common image scoring have passed for both released baselines on Yonsei.
 
 Common prediction directory:
 
@@ -77,8 +97,9 @@ part of the protocol. Do not composite an already white-composited RGB twice.
 Run `scripts/evaluate_renders.py --root ... --manifest ... --renders ... --output ...`
 inside Slurm. It computes PSNR, L1, SSIM (11x11 Gaussian window, sigma 1.5),
 LPIPS-Alex, and alpha-threshold-0.5 IoU, then averages frames within scenes and
-scenes equally. The shared evaluator is implemented; actual baseline outputs are
-not yet available to validate integration. [Temporal metrics](temporal.md) have
+scenes equally. Add `--regional-l1` for GT foreground/background L1. The shared
+evaluator has scored all 41 outputs for each of the three methods.
+[Temporal metrics](temporal.md) have
 separate correspondence/coordinate requirements; predicted-trajectory integration
 remains pending.
 Current exports use `benchmarks/neuman-v2/test` and the fingerprinted version-2

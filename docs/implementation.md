@@ -12,8 +12,10 @@ Started 2026-09-25. This is a living record of decisions and verified work.
   sequences. This is development, not unseen-identity generalization. NeuMan is
   no longer an untouched external test set after it influences development.
 - Released LHM/LHM++ checkpoints retain their own native SMPL-X machinery.
-- Start on one B200; up to eight were authorized in planning. Large jobs are not
-  started until smoke tests and a small pilot work. Shared storage limit: 500 GB.
+- Earlier PARCC work started on one B200; up to eight were authorized there.
+  The current Yonsei task uses **one RTX 4090 through tmux/srun** for smoke tests
+  and NeuMan training. All setup, downloads and execution run on compute nodes.
+  See [Yonsei evidence](yonsei.md). PARCC's 500 GB shared quota is server-specific.
 
 ## Implementation choices (not claims about unpublished LUNA code)
 
@@ -84,6 +86,14 @@ attention blocks, 16 heads, decoder MLP width 512; Sapiens-1B body, DINOv2-L fac
 DINOv3-L driver. Frozen feature encoders require their actual pretrained assets.
 No random feature encoder will be reported as a pretrained baseline.
 
+**Identity backbone clarification (September 28):** Sapiens for identity and
+DINOv3 for motion are explicit LUNA choices. Our additional DINOv2-L face branch
+comes from LHM and is **unconfirmed for LUNA**; it is more than an unspecified
+backbone-size choice. LUNA's reference to LHM's body/face tokens does not confirm
+the face backbone. The current checkpoints and qualitative results include
+this assumption. See the [source clarification](references.md#identity-encoder-provenance-clarification-september-28)
+for the paper distinction and upstream code provenance.
+
 The global rotation and translation predictors use **separate MLPs**, as stated
 in LUNA §3.2 and equations 2–3. The canonical-token projection is also an MLP
 (equation 4), producing C/2 channels before concatenating motion queries. Each
@@ -92,19 +102,96 @@ the paper does not specify that depth or activation. Rotation starts at identity
 translation at the training mean, and local residuals at zero. An initial shared
 global head and linear token projection were corrected before any real training.
 
+The global descriptor is the **mean of the 1,024 DINOv3 spatial patch tokens**.
+`DinoFeatures.forward` excludes class/register tokens, and
+`NeuralAnimator.forward` uses `driving_tokens.mean(1)`. LUNA §3.2 specifies
+aggregation into a global descriptor but leaves the pooling operator unspecified
+in the reviewed text. Mean pooling is an explicit implementation assumption.
+
+Our identity network is trained from initialization on NeuMan and then **frozen
+during animator training**. LUNA describes MV-LHM initialization and subsequent
+animator training but does not establish this freezing policy in the available
+description. Freezing is a development choice; released LHM weights are not
+treated as a compatible MV-LHM initialization for this independent architecture.
+
 Development schedules: teacher 10k updates and animator 10k updates, effective
 batch 16, LR 4e-4, AdamW betas (.9,.95), weight decay 5e-4, gradient clipping .1,
 cosine LR ending at 10% of initial LR. Animator starts with 1k global-motion
 updates. Validation every 500 updates; select by validation LPIPS. These schedules
-are development choices, not LUNA's 30k + 30k large-data training schedule.
+are development choices. LUNA's two 30k schedules are **monocular animator
+training followed by multiview animator refinement**; its separate MV-LHM
+identity pretraining schedule is not recovered from the available appendix.
+Our identity-plus-animator stages do not implement that multiview refinement.
+Source: [LUNA §§3.2–4.1](https://arxiv.org/html/2606.31981v2#S3.SS2).
 
-Rendering supervision: L1 RGB, L1 alpha, LPIPS. Structural position/quaternion/
-color loss uses weights 1/.5/.5, detached teacher targets, and a full-batch mean
-with zero contribution from unlabeled samples. Projection uses normalized image
-coordinates. All annotations are enabled initially. Later 1:5 withholding uses
-the paper's explicit weight-5 example and must document the discrepancy with its
-inverse-fraction wording. Optional scale/offset priors are reference-derived
-engineering defaults, not claimed exact LUNA losses.
+### Loss parity audit (September 28)
+
+This audit describes the **original** `training.py` run. The subsequent fresh
+identity run has separately documented [changes and execution evidence](identity-retraining.md),
+including Sapiens face features, Q/K normalization and balanced RGB reduction.
+
+The actual development objective is **not established as an exact LUNA loss
+implementation**. This audit reads `losses.py`, the stage branches in
+`training.py`, `perceptual.py`, the Yonsei configuration and training logs.
+Identity update 1 records RGB/mask/LPIPS/anisotropy/offset; animator update 1
+records rotation/projection, and update 1,001 adds rendering/structural terms.
+This is a source and log inspection, not a new numerical experiment.
+
+**Identity training.** The implemented objective is:
+
+```text
+L_identity = mean_abs(rendered_RGB - target_RGB)
+           + mean_abs(rendered_alpha - target_mask)
+           + LPIPS_Alex(rendered_RGB, target_RGB)
+           + 0.01 * mean(relu(max_scale / min_scale - 5))
+           + 10 * mean(relu(norm(canonical_mean - shaped_anchor) - 0.0525))
+```
+
+The scale denominator is clamped at `1e-8`; distances are in meters. RGB and
+mask reductions include the full crop, with foreground RGB composited on white.
+LPIPS inputs are mapped to [-1, 1]. The two geometry penalties are **always
+enabled in the identity training CLI**; previous descriptions as optional
+referred to their conceptual status, not a configuration switch. The canonical
+Gaussians are rendered after the annotated SMPL/LBS transform, with gradients
+through that transform. No canonical-image target is used.
+
+LUNA equation 6 lists RGB L1, mask and LPIPS rendering terms, but does not specify
+the mask norm or LPIPS backbone. Its separate MV-LHM identity pretraining details
+remain unavailable, so neither the complete identity objective nor these extra
+priors are confirmed. See [LUNA §3.3](https://arxiv.org/html/2606.31981v2#S3.SS3).
+
+The priors are LHM-derived engineering choices. They are also not exact LHM
+paper parity: LHM reports mask weight 0.5 and covariance-based ASAP weight 50;
+we use mask weight 1 and a scale-ratio hinge with weight 0.01. The 5.25 cm anchor
+threshold and weight 10 follow LHM's ACAP description, adapted to shaped SMPL
+anchors. See [LHM §4.4](https://arxiv.org/html/2503.10625v1#S4.SS4).
+At the [pinned LHM commit](references.md),
+`LHM/losses/ball_loss.py::ASAP_Loss` raises `NotImplementedError`;
+`Heuristic_ASAP_Loss` uses a ratio hinge with part-dependent aggregation.
+Our uniform aggregation/weight are assumptions.
+`LHM/losses/offset_loss.py::ACAP_Loss` instead defaults to 0.05625 m.
+
+**Animator training.** After the first 1,000 updates, the implementation sums
+rendering, global rotation, projection and structural losses. The structural
+position/quaternion/color weights are 1/0.5/0.5; warmup uses only global rotation
+and projection. These term choices and warmup duration follow LUNA equations
+7–10 and §4.1. See [LUNA §§3.3–4.1](https://arxiv.org/html/2606.31981v2#S3.SS3).
+The following details prevent an exact numerical-parity claim:
+
+- Quaternion distance is `1 - abs(dot(normalize(q), normalize(q_teacher)))`.
+  The paper names cosine distance without specifying sign handling. Position
+  and color errors use coordinate means; global sin/cos errors also use a mean.
+- Projection targets are the projected SMPL teacher centers. Errors are divided
+  by image width/height, averaged over x/y and valid centers, and masked using
+  finite teacher positions with positive depth. These concrete target, unit and
+  reduction choices are assumptions beyond equation 9.
+- The current trainer sets every sample to labeled and uses structural weight 1.
+  Its loss helpers support label masks, but the training loop does **not**
+  implement hybrid sampling or a configurable distillation multiplier.
+  Future 1:5 withholding must implement those paths and resolve the paper's
+  weight-5 example versus inverse-labeled-fraction wording.
+- The teacher is SMPL, the user's documented replacement for MHR. Identity is
+  frozen and teacher outputs are detached during animator training.
 
 Temporal MAE/MSJ implementations follow equations 11–12. Their point-correspondence,
 coordinate and unit requirements are recorded in [temporal.md](temporal.md).

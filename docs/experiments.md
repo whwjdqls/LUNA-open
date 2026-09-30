@@ -430,3 +430,1390 @@ project storage, not Git.
    export/common evaluator are available. Do not report baseline scores yet.
 5. Predicted-trajectory temporal evaluation, larger datasets, multiview
    refinement, DDP, alternative controls and hybrid-label ablations remain.
+
+## 2026-09-26 — Yonsei data acquisition (separate from PARCC)
+
+- User clarified that this checkout is on **Yonsei**, with RTX 4090, RTX 3090,
+  A6000, and RTX PRO 6000 options. Earlier entries above and other agents'
+  experiments are on **PARCC/B200**. Their assets, feature caches, job IDs,
+  and execution results are not evidence of readiness on Yonsei.
+- Storage: `/scratch2/whwjdqls99/LUNA-open`. The initial requested account name
+  `whwjwdqld99` did not exist; used the existing `whwjdqls99` directory. Scratch
+  initially had about 7.9 TB free; `lfs quota` showed no per-user hard quota.
+- Preserve NeuMan-first and SMPL. Added a Yonsei configuration and environment
+  script; the PARCC configuration is retained. No Yonsei GPU run is claimed.
+- Created a small acquisition venv using the existing Python 3.11 `4danyone`
+  environment's site packages, with Joblib 1.5.3 installed only in the venv.
+  This is not an independently installed or verified training environment.
+- Initial public transfers and venv setup ran on the login node. When the user
+  specified no login-node work, stopped the remaining login-node transfers and
+  moved acquisition to CPU Slurm. The new launcher requires `SLURM_JOB_ID`.
+- Yonsei's CPU partition requires `--partition=dell_cpu --qos=cpu_qos`.
+  Omitting QoS caused `Invalid qos specification`. The accounting service also
+  rejected `sacctmgr` with a localhost connection refusal; `scontrol` and log
+  inspection are used for job evidence.
+- SMPL preparation job **2336927** failed on `cnode02`: NumPy 1.26 did not expose
+  `np._core.multiarray` as an already imported attribute. Changed the converter
+  to explicitly import `_reconstruct`, retaining NumPy 1.x and 2.x pickle names
+  in the existing allowlist. It wrote no converted model before failing.
+- User provided `assets/SMPL_NEUTRAL.pkl` in this checkout. Use this supplied
+  asset for the local conversion; preserve the original and license terms.
+- Hugging Face's cached token initially failed `whoami` and DINOv3 access with
+  HTTP 401. Gave account approval and terminal-login instructions. The running
+  downloader subsequently reported all three encoders fetched, including
+  DINOv3; separate compute-node content verification is still required.
+- LPIPS 0.1.4's wheel and `weights/v0.1/alex.pth` passed PyPI wheel SHA256 and
+  the project's pinned linear-weight SHA256. Stored wheel, weight, license,
+  and receipt under scratch `assets/lpips/`.
+- Both pinned baseline source checkouts completed. Baseline checkpoint transfers
+  are resumable. Native baseline inference and its auxiliary assets remain
+  separate from core LUNA data readiness.
+- Slurm intermittently reports `Unexpected message received`, even after
+  accepting a submission. Check for the job before retrying. Requests 2336935
+  and 2336936 appeared after error responses; cancellation of the duplicate
+  also returned a socket timeout, so its actual state requires inspection.
+  Job **2336935** failed because sbatch copies its script into Slurm's spool
+  directory. Fixed repository discovery to use `LUNA_REPO`/`SLURM_SUBMIT_DIR`.
+  Added an exclusive acquisition lock to guard against duplicate execution.
+- A subsequent srun request **2336941** reported communication errors and a
+  node-readiness failure. No workload success follows from that allocation.
+- Corrected batch job **2336945** is running on **cnode02**, four CPUs, 8 GB
+  requested, no GPU. SMPL conversion succeeded with exact numeric round trips,
+  and AlexNet passed its pinned SHA256. The user-supplied original SMPL hash
+  matches PARCC; the numeric pickle's local hash differs under NumPy 1.26.
+  See the local receipt and [yonsei.md](yonsei.md); do not treat serialized
+  fingerprints as interchangeable when transferring checkpoints between servers.
+
+- **2336945 completed**, exit 0, walltime **12 min 6 s** on cnode02. All five
+  model assets (12 files, 15,466,686,418 bytes) passed upstream LFS SHA256 or
+  Git blob hash verification. The independent report was inspected:
+  scratch `assets/download-verification.json`.
+- NeuMan's pinned SHA256 and all ZIP CRCs passed; extraction produced
+  3,039,368,588 bytes. All 429 frames passed the adapter, with 344/44/41 split
+  counts and 1,311 fingerprinted inputs. Its generated manifest hash exactly
+  matches PARCC's `fb6d799c306874a3072ef23c1cd9a40fea97c604c332101479ddfc596feb4070`.
+- Resolved the SMPL serialization difference in a step within 2336945. A small
+  separate conversion venv with NumPy **2.4.6** produced the exact PARCC numeric
+  file SHA256 `b061fe07cebb7a8987ec7cfed7612755f077abb8923442fac0e69d3d942f38b9`.
+  All array hashes/shapes/dtypes match the NumPy 1.26 conversion. Preserved that
+  first copy as `SMPL_NEUTRAL.numpy1.pkl`; the configured canonical filename now
+  contains the file matching PARCC. Original supplied asset is unchanged.
+- The first focused test command could not run because Pytest was absent from
+  the acquisition venv. Installed Pytest/Ruff only in that venv, on cnode02.
+  **2 existing body-format tests passed in 0.31 s**. A subsequent lint check
+  reported an import-order issue in a temporary downloader change; that unused
+  transport branch was removed. Final static checks run separately below.
+- A 1-MiB HTTP range probe against the public LHM file succeeded (206 and exact
+  byte count). Final HF checkpoints were downloaded through the existing HF
+  library downloader; full NeuMan transfer used the new range downloader.
+- Queue inspection eventually returned only 2336945 for the acquisition job
+  names: no duplicate request remained active. No GPU allocation was used.
+- Final CPU job **2336958 completed**, exit 0, 1 s on cnode02. Ruff lint/format
+  passed for the five changed/new Python files checked; both Yonsei shell
+  scripts passed syntax checks. Manifest, canonical SMPL, and both LPIPS
+  hashes were rechecked, along with configured paths and split counts. Removed
+  only the completed temporary download ranges/probes and retained the verified
+  NeuMan archive. Final receipt: scratch `acquisition-summary.json`.
+- Core NeuMan data and pretrained inputs are ready on Yonsei. No local feature
+  cache, full training environment, GPU forward path, baseline inference, or
+  training quality has been verified. Larger datasets remain deferred.
+
+Final acquisition checks and local readiness are recorded in [yonsei.md](yonsei.md).
+
+## 2026-09-26 — Yonsei environment and single-4090 preparation
+
+- User requested code review, acquisition, environment setup, single-4090
+  tmux/srun smoke tests, then NeuMan training. The source and script review is
+  recorded in [yonsei-code-review.md](yonsei-code-review.md). Long development
+  and short integration schedules remain separate configurations.
+- CPU setup **2336964**, cnode02: installed the pinned environment in an
+  isolated scratch venv, installed this checkout, and passed `pip check`.
+  **25 tests passed in 7.13 s**. LPIPS CPU metric and nonzero finite gradient
+  checks passed. No CUDA path is established by those CPU results.
+- The setup script writes a local environment lock/receipt without replacing
+  the tracked requirements. Torch 2.8.0+cu128, gsplat 1.5.3, Transformers 4.57.6.
+- Initial GPU srun **2336967**, inside tmux `luna_yonsei_4090`, was allocated
+  on **cs-gpu-01** and failed at CUDA initialization (exit 1, 16 s). The first
+  Torch availability assertion failed; no smoke/training ran. Requesting another
+  node with `LUNA_EXCLUDE_NODES=cs-gpu-01` and retaining diagnostics in its shell.
+- Added Yonsei launchers and the full-model, eight-update-per-stage resume
+  smoke configuration. Corrected old synthetic-smoke asset-unavailability
+  labels. GPU compile/smoke, local features, and training remain pending.
+- Replacement srun **2336972**, **node32**, confirms one RTX 4090 (24 GB class),
+  driver 580.126.09, capability 8.9, Torch 2.8.0+cu128. CUDA toolkit found at
+  `/opt/ohpc/pub/apps/cuda/12.8`, NVCC 12.8.93. Ruff lint/format (47 Python files)
+  and shell syntax passed before the first local gsplat compilation.
+- CPU SMPL audit **2336974** passed on cnode02 in 36.71 s: all 429 fits,
+  exact reference-surface agreement for both pose conventions, positive depths,
+  DA-pose round trips, nonzero finite teacher gradient and detached targets.
+  All six montage panels were inspected; alignment is plausible, with expected
+  fit/clothing differences. See [yonsei.md](yonsei.md) for evidence and limits.
+- Added actual update timing, gradient norm and peak GPU allocation to training
+  records. These measurements exclude validation/checkpoint time and do not
+  change the configured architecture, loss or optimizer. Execution is pending.
+- gsplat **sm_89 build passed** in 207.22 s on node32. Isolated CUDA smoke
+  **passed** in 36.29 s: actual body/face encoders, finite nonzero gradients,
+  30-step renderer loss reduction `0.0016563 -> 0.00002893`, and intended-size
+  identity+animator forward/backward (1.91 s). Peak allocated memory 8.56 GiB.
+  Anchors and driver tokens are synthetic, rendering 128px; real 512px training
+  is a separate gate. Evidence: `outputs/gpu-2336972/network-smoke/report.json`.
+- Full local body/face/motion caching started in 2336972 after that pass.
+- All **1,287 local feature files passed** their audit: 429 per kind,
+  9,898,471,869 bytes total. The 409 keypoint face crops / 20 fallbacks match
+  the data protocol. No PARCC feature files were copied.
+- The real CLI smoke **completed at 06:57 KST** in 2336972: eight updates per
+  stage, effective batch two, 512px; both stages resumed in fresh processes
+  after update four. Peak allocated memory identity **8.85 GiB**, animator
+  **4.81 GiB**. Saved optimizer/scheduler/RNG fields and provenance passed the
+  new completion audit, along with exact membership of all 44 validation frames.
+  Repeated best-checkpoint LPIPS matched the logged values exactly in this run:
+  identity **0.1497447092**, animator **0.3710220846**, both selected at update four.
+  This short diagnostic does not establish reconstruction/animation quality.
+- Launched the existing 40-step fixed-frame identity learning/continuation
+  pilot in the same allocation, with its original strict assertions intact.
+- Fixed-frame learning completed 40 finite updates: objective **0.21436 →
+  0.16388**, LPIPS **0.14946 → 0.11192**, PSNR **17.304 → 18.610 dB**. Inspected
+  initial/final/target renders; silhouette improves, colors/detail remain coarse.
+  The pilot then **failed** its unchanged max-RGB continuation threshold:
+  loss difference 0, max parameter difference `3.176e-6`, max RGB `0.006765`.
+- Local resume diagnostic passed exact model/optimizer/RNG restoration and
+  identical pre-update RGB/means/loss. Repeating an update in the **same** model
+  instance gave max RGB difference `0.008071` (RMS `1.05e-4`); a fresh restored
+  instance gave `0.005152` (RMS `9.95e-5`). Isolated gsplat backward differed by
+  up to `4.66e-10` with identical forward RGB. The observations support CUDA
+  repeat-execution variability for this input; no bitwise continuation claim
+  or relaxed test threshold is made. Runtime 12.38 s. Details in [yonsei.md](yonsei.md).
+- Full-run launch first stopped at Ruff formatting for the new training audit;
+  formatted that file on node32. Repeated Ruff lint/format (47 files), shell
+  syntax and **25 CPU tests (7.06 s)** passed before training.
+- **Full development training launched at 07:01 KST** in the existing **2336972**
+  allocation on **node32 / one RTX 4090**. `configs/neuman_yonsei.yaml`, output
+  `runs/neuman`: 10k identity + 10k animator, effective batch 16, unchanged full
+  model and 512px resolution. First five updates were finite, roughly 12 s each
+  after startup, peak allocated memory about 8.85 GiB. Validation/checkpoint
+  interval 500. Full stage completion and trained-model metrics remain pending.
+- Source/config snapshot, environment and device receipts saved under
+  `runs/neuman/provenance`. The scripted sequence evaluates validation/test
+  checkpoints after training each stage and audits final completion. Its tmux
+  command releases the GPU on successful completion; errors retain the compute
+  shell for diagnosis. The overall training goal remains active.
+- At **07:22 KST**, an audit step inside 2336972 checked all first **100**
+  full-run update records: consecutive indices and all values finite. Mean
+  update time (11–100) **11.964 s**. First-ten vs last-ten training means:
+  LPIPS **0.15350 → 0.12012**, RGB L1 **0.04893 → 0.03189**. Samples vary;
+  these are training-loss summaries, not held-out quality metrics. Receipt:
+  `outputs/gpu-2336972/training-progress-100.json`. Full training remains active.
+- Rechecked LUNA §3.2/§4.1 while training continued. Recorded patch-mean global
+  pooling and frozen identity weights in the animator stage as explicit
+  implementation assumptions, and clarified stage terminology in the source
+  notes. This documentation update does not change the running experiment.
+- At **17:28 KST**, a CPU audit inside the still-running **2336972 / node32**
+  allocation checked **3,134** consecutive finite training records and the
+  identity `latest.pt`/`best.pt` checkpoints, both at **update 3,000**.
+  Config/input provenance, scheduler epoch 3,000, all 137 optimizer steps,
+  finite model/optimizer tensors and RNG fields passed inspection. This is
+  checkpoint inspection, not an additional resume execution test.
+- Full-run logged validation LPIPS improved at all six scheduled checks:
+  **0.101179, 0.091635, 0.081734, 0.076181, 0.071117, 0.068917** at updates
+  500 through 3,000. These are means of per-scene means. The configuration has
+  44 validation frames; intermediate records do not retain per-frame metrics
+  or renders, so their membership and visual quality were not rechecked here.
+  Updates 2,501–3,000 averaged **11.987 s**; peak recorded allocation was
+  **8.85 GiB**. Evidence: `outputs/gpu-2336972/training-progress-3000.json`.
+  Identity training is still running; animator and final validation/test
+  evaluation remain pending. No training code/configuration was changed.
+- At **18:43 KST**, the **update-3,500** identity checkpoint audit passed on
+  node32 inside **2336972**. Both latest/best checkpoints were at 3,500, with
+  matching config/input provenance, scheduler and all 137 optimizer states;
+  all 707 checked model/optimizer tensors per checkpoint were finite and RNG
+  fields were present. The first **3,510** log records were consecutive and
+  finite. Logged validation LPIPS improved from **0.068917** at 3,000 to
+  **0.067138** at 3,500. Mean update time (3,001–3,500): **11.977 s**; peak
+  allocation **8.85 GiB**. Receipt: `outputs/gpu-2336972/training-progress-3500.json`.
+  Training remains active, with animator/final evaluation pending. This CPU
+  audit did not rerun inference, per-frame evaluation or resumed execution.
+- Slurm monitoring queries intermittently failed or timed out while tmux and
+  training logs continued to advance. Later successful queries and the audit
+  confirmed the existing allocation; no run was restarted on that basis.
+- At **20:38 KST**, the **update-4,000** identity checkpoint audit passed in
+  separate CPU job **2339428 / cnode02** (`dell_cpu`, `cpu_qos`), while the
+  original **2336972 / node32 / RTX 4090** training run continued. The first
+  **4,079** records were consecutive and finite; both latest/best checkpoints
+  matched update 4,000, config/input provenance, scheduler epoch, all 137
+  optimizer steps, RNG fields and 707 finite model/optimizer tensors each.
+  Logged validation LPIPS improved to **0.065733**. Mean update time
+  (3,501–4,000): **11.974 s**; peak allocation **8.85 GiB**. CPU audit time:
+  **12.31 s**. Receipt: `outputs/gpu-2336972/training-progress-4000.json`.
+  Three earlier overlapping-step attempts were rejected by Slurm before
+  Python started; successful status queries and advancing logs confirmed
+  the GPU job remained running without a restart. All checkpoint inspection
+  and hashing ran on compute nodes. No new resume execution or per-frame
+  evaluation was performed; animator training and final evaluations are pending.
+- At **22:05:59 KST**, the identity checkpoint audit at **update 4,500** passed
+  in CPU job **2339496 / cnode02** (`dell_cpu`, `cpu_qos`). Both latest/best
+  checkpoints were at 4,500, with matching configuration/input provenance,
+  scheduler epoch, all 137 optimizer steps, RNG fields and 707 finite checked
+  model/optimizer tensors each. All **4,517** inspected training records were
+  consecutive and finite. Logged validation LPIPS improved from **0.065733**
+  to **0.064453**. Mean update time (4,001–4,500): **12.011 s**; peak allocation
+  **8.85 GiB**; CPU audit time **12.21 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-4500.json`.
+  Slurm emitted query/launcher communication warnings, but the CPU audit
+  completed with exit 0 and the original GPU training run continued. The
+  launcher output is preserved in `outputs/gpu-2336972/audit-4500-cpu.log`.
+  This audit inspected checkpoints and logs; it did not rerun inference,
+  per-frame evaluation or resumed execution. Full training remains active.
+  At **22:07 KST**, `scontrol` confirmed **2336972** remained `RUNNING` on
+  node32 with one RTX 4090 and `Restarts=0`; the training log had reached
+  update **4,524**.
+- At **23:51:35 KST**, CPU batch job **2339677 / cnode02** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 5,000**.
+  Both latest/best checkpoints matched update 5,000, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **5,044** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved to
+  **0.063121**. Mean update time (4,501–5,000): **11.963 s**; peak allocation
+  **8.85 GiB**; CPU inspection time **12.25 s**. Slurm confirmed `COMPLETED`
+  with exit code 0 and total batch runtime **24 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-5000.json`.
+  The `srun` allocation attempt and later `sbatch` client both reported Slurm
+  communication errors, but the batch request was accepted and executed.
+  Its `singleton` dependency guarded against overlapping audits, and no further
+  submission was made after the ambiguous response. Output and submission logs
+  are preserved as `audit-5000-cpu-2339677.log`, `audit-5000-cpu.log` and
+  `audit-5000-batch-submission.log` under `outputs/gpu-2336972/`.
+  GPU training continued to update **5,050** without a restart. This audit
+  did not rerun inference, per-frame evaluation or resumed execution. Identity
+  training continues toward 10,000 updates; animator/final evaluations remain pending.
+  A subsequent successful queue query found no remaining audit jobs. At
+  **23:54 KST**, `scontrol` confirmed the original GPU allocation **2336972**
+  was still `RUNNING` on node32 with one RTX 4090 and `Restarts=0`; the
+  training log had reached update **5,059**.
+
+## 2026-09-27 — Yonsei NeuMan training progress
+
+- At **01:24:36 KST**, CPU batch job **2339812 / cnode01** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 5,500**.
+  Both latest/best checkpoints matched update 5,500, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **5,508** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved from
+  **0.063121** to **0.062219**. Mean update time (5,001–5,500): **11.962 s**;
+  peak allocation **8.85 GiB**; CPU inspection time **12.44 s**. Slurm confirmed
+  `COMPLETED` with exit code 0 and total batch runtime **26 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-5500.json`. Batch wrapper and output:
+  `outputs/gpu-2336972/audit_identity_5500.sbatch` and
+  `outputs/gpu-2336972/audit-5500-cpu-2339812.log`.
+- At **01:26 KST**, `scontrol` confirmed the original GPU allocation
+  **2336972** remained `RUNNING` on node32 with one RTX 4090 and `Restarts=0`;
+  the training log had reached update **5,519**. No training code or
+  configuration was changed. This CPU audit did not rerun inference, per-frame
+  evaluation or resumed execution. Identity training continues toward 10,000
+  updates; animator training and final evaluations remain pending.
+- At **03:04:27 KST**, CPU batch job **2339842 / cnode01** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 6,000**.
+  Both latest/best checkpoints matched update 6,000, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **6,007** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved from
+  **0.062219** to **0.061851**. Mean update time (5,501–6,000): **11.963 s**;
+  peak allocation **8.85 GiB**; CPU inspection time **12.90 s**. Slurm confirmed
+  `COMPLETED` with exit code 0 and total batch runtime **26 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-6000.json`. Batch wrapper and output:
+  `outputs/gpu-2336972/audit_identity_6000.sbatch` and
+  `outputs/gpu-2336972/audit-6000-cpu-2339842.log`.
+- At **03:05 KST**, `scontrol` confirmed the original GPU allocation
+  **2336972** remained `RUNNING` on node32 with one RTX 4090 and `Restarts=0`;
+  the training log had reached update **6,015**. No training code or
+  configuration was changed. The CPU audit did not rerun inference, per-frame
+  evaluation or resumed execution. Identity training continues toward 10,000
+  updates; animator training and final evaluations remain pending.
+- At **03:29 KST**, CPU job **2339850 / cnode01** (`dell_cpu`, `cpu_qos`)
+  completed with exit code 0 after **24 s**. Added the separate
+  `scripts/audit_evaluation_records.py` and 22 focused test cases; Ruff passed
+  and the full suite passed **47 tests in 14.57 s**. There was one PyTorch
+  `Can't initialize NVML` warning on the CPU node. The new audit checked
+  both stages' existing smoke validation records: **44 unique frames each**,
+  exact manifest membership, finite per-frame metrics, protocol/checkpoint-path
+  provenance, and independently recomputed scene/macro means. Maximum absolute
+  aggregation differences were **0** (identity) and **1.11e-16** (animator).
+  Receipt: `outputs/gpu-2336972/evaluation-audit-smoke-validation.json`;
+  log: `outputs/gpu-2336972/evaluation-readiness-cpu-2339850.log`.
+  All test execution and hashing ran on the CPU compute node. Training code,
+  configuration and the running launcher were unchanged.
+- At **03:30 KST**, submitted CPU batch job **2339851** for the new audit of
+  both full stages' validation/test records. Slurm confirmed `PENDING`,
+  `Reason=Dependency`, `afterok:2336972`; it requests one CPU and 2 GiB in
+  `dell_cpu` with `cpu_qos`. Wrapper:
+  `outputs/gpu-2336972/audit_final_evaluations.sbatch`. On success it will write
+  `runs/neuman/evaluation-records-audit.json`, checking **44 validation and
+  41 test frames per stage**. This final audit has not run yet. It validates
+  saved scores and hashes selected checkpoint bytes, without GPU inference or
+  tensor loading. The training log reached identity update **6,138** while
+  the original tmux pane remained live. Full training is still in progress.
+- At **03:38:13 KST**, CPU batch job **2339853 / cnode02** (`dell_cpu`,
+  `cpu_qos`) completed successfully in **37 s**. Prepared the scratch helper
+  `outputs/gpu-2336972/audit_animator_progress.py` for the forthcoming animator
+  stage. Ruff passed; **eight focused audit tests passed in 13.39 s**, separately
+  from the repository's 47-test suite. Inspection of both saved smoke animator
+  checkpoints took **17.79 s** and confirmed all **147 frozen identity tensors**
+  exactly matched the selected identity checkpoint, with **713 finite checked
+  model/optimizer tensors per checkpoint** and matching config/input provenance,
+  scheduler and RNG fields. The 12 global optimizer counters were **8 / 4** in
+  latest/best; the 127 active local counters were **6 / 2**, matching the smoke
+  configuration's two-update warmup. Eight final context-output parameters had
+  no optimizer state, as expected from the current graph. The helper records
+  every parameter mapping and accounts for the full run's 1,000-update warmup.
+  Receipt: `outputs/gpu-2336972/animator-audit-smoke-checkpoints.json`;
+  log: `outputs/gpu-2336972/animator-readiness-cpu-2339853.log`.
+  No GPU inference, resumed execution or full animator training was performed
+  by this CPU audit. Full identity training continued to update **6,179**;
+  its code, configuration and schedule were unchanged.
+- At **04:44:33 KST**, CPU batch job **2339888 / cnode02** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 6,500**.
+  Both latest/best checkpoints matched update 6,500, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **6,506** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved from
+  **0.061851** to **0.061165**. Mean update time (6,001–6,500): **11.984 s**;
+  peak allocation **8.85 GiB**; CPU inspection time **12.37 s**. Slurm confirmed
+  `COMPLETED` with exit code 0 and total batch runtime **26 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-6500.json`. Batch wrapper and output:
+  `outputs/gpu-2336972/audit_identity_6500.sbatch` and
+  `outputs/gpu-2336972/audit-6500-cpu-2339888.log`.
+- At **04:44 KST**, `scontrol` confirmed GPU allocation **2336972** remained
+  `RUNNING` on node32 with one RTX 4090 and `Restarts=0`. At **04:45 KST** the
+  training log had reached identity update **6,511**, and the final evaluation
+  record audit job **2339851** remained pending on `afterok:2336972`. No training
+  code or configuration was changed. The CPU checkpoint audit did not rerun
+  inference, per-frame evaluation or resumed execution. Identity training
+  continues toward 10,000 updates; animator training and final evaluations
+  remain pending.
+- At **06:25:31 KST**, CPU batch job **2340009 / cnode02** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 7,000**.
+  Both latest/best checkpoints matched update 7,000, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **7,007** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved from
+  **0.061165** to **0.060376**. Mean update time (6,501–7,000): **12.044 s**;
+  peak allocation **8.85 GiB**; CPU inspection time **12.31 s**. Slurm confirmed
+  `COMPLETED` with exit code 0 and total batch runtime **24 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-7000.json`. Batch wrapper and output:
+  `outputs/gpu-2336972/audit_identity_7000.sbatch` and
+  `outputs/gpu-2336972/audit-7000-cpu-2340009.log`.
+- At **06:25 KST**, `scontrol` confirmed GPU allocation **2336972** remained
+  `RUNNING` on node32 with one RTX 4090 and `Restarts=0`. At **06:26 KST** the
+  training log had reached identity update **7,011**, and the final evaluation
+  record audit job **2339851** remained pending on `afterok:2336972`. No training
+  code or configuration was changed. The CPU checkpoint audit did not rerun
+  inference, per-frame evaluation or resumed execution. Identity training
+  continues toward 10,000 updates; animator training and final evaluations
+  remain pending.
+- At **08:05:42 KST**, CPU batch job **2340039 / cnode02** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 7,500**.
+  Both latest/best checkpoints matched update 7,500, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **7,505** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved from
+  **0.060376** to **0.059603**. Mean update time (7,001–7,500): **12.024 s**;
+  peak allocation **8.85 GiB**; CPU inspection time **12.52 s**. Slurm confirmed
+  `COMPLETED` with exit code 0 and total batch runtime **22 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-7500.json`. Batch wrapper and output:
+  `outputs/gpu-2336972/audit_identity_7500.sbatch` and
+  `outputs/gpu-2336972/audit-7500-cpu-2340039.log`.
+- At **08:05 KST**, `scontrol` confirmed GPU allocation **2336972** remained
+  `RUNNING` on node32 with one RTX 4090 and `Restarts=0`. At **08:06 KST** the
+  training log had reached identity update **7,510**, and the final evaluation
+  record audit job **2339851** remained pending on `afterok:2336972`. No training
+  code or configuration was changed. The CPU checkpoint audit did not rerun
+  inference, per-frame evaluation or resumed execution. Identity training
+  continues toward 10,000 updates; animator training and final evaluations
+  remain pending.
+- At **09:51:22 KST**, CPU batch job **2340202 / cnode01** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 8,000**.
+  Both latest/best checkpoints matched update 8,000, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **8,029** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved from
+  **0.059603** to **0.059087**. Mean update time (7,501–8,000): **12.055 s**;
+  peak allocation **8.85 GiB**; CPU inspection time **12.37 s**. Slurm confirmed
+  `COMPLETED` with exit code 0 and total batch runtime **23 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-8000.json`. Batch wrapper and output:
+  `outputs/gpu-2336972/audit_identity_8000.sbatch` and
+  `outputs/gpu-2336972/audit-8000-cpu-2340202.log`.
+- At **09:51 KST**, `scontrol` confirmed GPU allocation **2336972** remained
+  `RUNNING` on node32 with one RTX 4090 and `Restarts=0`; the training log
+  reached identity update **8,030**. The final evaluation record audit job
+  **2339851** remained pending on `afterok:2336972`. No training code or
+  configuration was changed. The CPU checkpoint audit did not rerun inference,
+  per-frame evaluation or resumed execution. Identity training continues
+  toward 10,000 updates; animator training and final evaluations remain pending.
+- At **11:27:51 KST**, CPU batch job **2340258 / cnode02** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 8,500**.
+  Both latest/best checkpoints matched update 8,500, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **8,507** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved from
+  **0.059087** to **0.058843**. Mean update time (8,001–8,500): **12.062 s**;
+  peak allocation **8.85 GiB**; CPU inspection time **12.35 s**. Slurm confirmed
+  `COMPLETED` with exit code 0 and total batch runtime **21 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-8500.json`. Batch wrapper and output:
+  `outputs/gpu-2336972/audit_identity_8500.sbatch` and
+  `outputs/gpu-2336972/audit-8500-cpu-2340258.log`.
+- At **11:27 KST**, `scontrol` confirmed GPU allocation **2336972** remained
+  `RUNNING` on node32 with one RTX 4090 and `Restarts=0`. At **11:28 KST** the
+  training log had reached identity update **8,510**, and the final evaluation
+  record audit job **2339851** remained pending on `afterok:2336972`. No training
+  code or configuration was changed. The CPU checkpoint audit did not rerun
+  inference, per-frame evaluation or resumed execution. Identity training
+  continues toward 10,000 updates; animator training and final evaluations
+  remain pending.
+- At **13:08:42 KST**, CPU batch job **2340437 / cnode01** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 9,000**.
+  Both latest/best checkpoints matched update 9,000, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **9,007** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved from
+  **0.058843** to **0.058493**. Mean update time (8,501–9,000): **12.034 s**;
+  peak allocation **8.85 GiB**; CPU inspection time **13.63 s**. Slurm confirmed
+  `COMPLETED` with exit code 0 and total batch runtime **24 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-9000.json`. Batch wrapper and output:
+  `outputs/gpu-2336972/audit_identity_9000.sbatch` and
+  `outputs/gpu-2336972/audit-9000-cpu-2340437.log`.
+- At **13:08 KST**, `scontrol` confirmed GPU allocation **2336972** remained
+  `RUNNING` on node32 with one RTX 4090 and `Restarts=0`; the training log
+  reached identity update **9,010**. The final evaluation record audit job
+  **2339851** remained pending on `afterok:2336972`. No training code or
+  configuration was changed. The CPU checkpoint audit did not rerun inference,
+  per-frame evaluation or resumed execution. Identity training continues
+  toward 10,000 updates; animator training and final evaluations remain pending.
+- At **14:49:07 KST**, CPU batch job **2340674 / cnode01** (`dell_cpu`,
+  `cpu_qos`) passed the identity checkpoint audit at **update 9,500**.
+  Both latest/best checkpoints matched update 9,500, configuration/input
+  provenance, scheduler epoch, all 137 optimizer steps, RNG fields and 707
+  finite checked model/optimizer tensors each. All **9,504** inspected training
+  records were consecutive and finite. Logged validation LPIPS improved from
+  **0.058493** to **0.058270**. Mean update time (9,001–9,500): **12.078 s**;
+  peak allocation **8.85 GiB**; CPU inspection time **12.45 s**. Slurm confirmed
+  `COMPLETED` with exit code 0 and total batch runtime **23 s**. Receipt:
+  `outputs/gpu-2336972/training-progress-9500.json`. Batch wrapper and output:
+  `outputs/gpu-2336972/audit_identity_9500.sbatch` and
+  `outputs/gpu-2336972/audit-9500-cpu-2340674.log`.
+- At **14:48 KST**, `scontrol` confirmed GPU allocation **2336972** remained
+  `RUNNING` on node32 with one RTX 4090 and `Restarts=0`. At **14:49 KST** the
+  training log had reached identity update **9,506**, and the final evaluation
+  record audit job **2339851** remained pending on `afterok:2336972`. No training
+  code or configuration was changed. The CPU checkpoint audit did not rerun
+  inference, per-frame evaluation or resumed execution. Identity training
+  continues toward 10,000 updates; animator training and final evaluations
+  remain pending.
+- The launcher recorded **identity stage completion at 16:28:46 KST**, after
+  all **10,000** configured updates. Latest/best checkpoints both contain
+  update 10,000, selected by validation LPIPS **0.0579639244**. The same GPU
+  launcher completed validation and test evaluations, then started the
+  animator. At **16:30 KST**, GPU job **2336972** remained `RUNNING` on node32
+  with one RTX 4090 and `Restarts=0`; at **16:31 KST**, the animator log had
+  reached update **12**, within its configured 1,000-update global warmup.
+- CPU batch job **2340943 / cnode02** (`dell_cpu`, `cpu_qos`) passed both final
+  identity audits at **16:31 KST**, with `COMPLETED`, exit code 0 and **23 s**
+  total runtime. All **10,000** identity records were consecutive and finite.
+  Latest/best checkpoint configuration/input provenance, scheduler epoch,
+  all **137** optimizer steps, RNG fields and **707** finite checked tensors
+  each passed. Updates 9,501–10,000 averaged **12.037 s**; peak allocation
+  remained **8.85 GiB**; checkpoint inspection took **12.37 s**. The separate
+  final-stage inspector preserves the earlier checks and additionally requires
+  exactly the configured final update and record count. Ruff formatting/checks
+  passed on the compute node. Receipt:
+  `outputs/gpu-2336972/training-progress-10000.json`; inspector/wrapper:
+  `outputs/gpu-2336972/audit_identity_complete.{py,sbatch}`; log:
+  `outputs/gpu-2336972/identity-complete-cpu-2340943.log`.
+- The same CPU job verified exact unique membership of **44 validation** and
+  **41 test** frames, all saved scores finite, checkpoint path/manifest/protocol
+  provenance and per-scene/macro aggregation. Maximum aggregation differences
+  were **0** (validation) and **1.11e-16** (test). Repeated validation LPIPS
+  exactly matched the selected training validation in this run. Macro identity
+  results for seen sequences, held-out frames and annotated crops:
+
+  | Split | Frames | PSNR (dB) | L1 | SSIM | Mask IoU | LPIPS |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | Validation | 44 | 22.0872 | 0.017092 | 0.911606 | 0.901841 | 0.057964 |
+  | Test | 41 | 21.9696 | 0.017542 | 0.912442 | 0.894933 | 0.057738 |
+
+  Receipt: `outputs/gpu-2336972/identity-evaluation-records-audit.json`;
+  raw per-frame scores: `runs/neuman/identity/{val,test}-metrics.json`;
+  selected model: `runs/neuman/identity/best.pt`. CPU audits inspect checkpoint
+  state and saved scores; resumed execution and rendered-image review were
+  outside these checks. Evaluation metadata records a checkpoint path; audit
+  hashes identify bytes observed during inspection.
+- Animator training continues toward **10,000 updates** with unchanged code,
+  configuration and schedule. CPU job **2339851** remains pending on
+  `afterok:2336972` for the final record audit of both stages. Animator quality
+  and full-run completion remain unverified.
+- At **16:49 KST**, CPU job **2340960 / cnode02** corrected the remaining
+  checkout-local tooling caches. Existing `.ruff_cache`, `.pytest_cache` and
+  four source/test bytecode cache directories were preserved under
+  `cache/repository-cache-archive/2340960/`; their checkout paths now link to
+  scratch cache directories. `scripts/yonsei_env.sh` explicitly routes Ruff
+  and pytest caches to scratch and disables bytecode writes for new commands.
+  `.gitignore` also ignores the compatibility links. Existing scratch caches
+  were preserved, and model code, training YAML and schedule were unchanged.
+- The same compute job passed shell syntax and Ruff checks, format validation
+  for **49 repository files**, and **48 tests in 12.52 s** (47 repository tests
+  plus one cache-path/bytecode-setting test). There was one CPU-node Torch
+  `Can't initialize NVML` warning. Post-test inspection confirmed all six
+  cache links resolve under scratch. Slurm reported `COMPLETED`, exit code 0,
+  **16 s** total runtime. Receipts:
+  `outputs/gpu-2336972/tool-cache-2340960-{apply,check}.json`; log:
+  `outputs/gpu-2336972/tool-caches-cpu-2340960.log`. Animator training continued
+  past update **171** during the check; at **16:50 KST**, the original
+  **2336972 / node32 / one RTX 4090** job remained `RUNNING` with `Restarts=0`.
+- At **17:29:13 KST**, CPU job **2341014 / cnode01** (`dell_cpu`, `cpu_qos`)
+  passed the first full-run animator checkpoint audit, at **update 500**.
+  Latest/best checkpoints both contain update 500, with logged macro validation
+  LPIPS **0.3178930914** during the configured 1,000-update global warmup.
+  All **514** inspected records were consecutive and finite. Configuration/input
+  provenance, scheduler epoch 500, RNG fields and **332** finite checked tensors
+  per checkpoint passed. All **147** frozen identity tensors exactly matched
+  the selected update-10,000 identity checkpoint, whose SHA-256 matched its
+  completed identity audit.
+- Optimizer inspection covered **147 parameter tensors**: **12 global states
+  at step 500**, **127 local parameter tensors without optimizer states** during
+  warmup, and **8 unused final-context parameter tensors** without optimizer
+  states. Model/training/auditor source hashes matched the readiness record.
+  Updates 1–500 averaged **6.787 s**; maximum logged per-update allocation was
+  **2.46 GiB**. CPU inspection took **15.41 s**; Slurm reported `COMPLETED`, exit
+  code 0 and **23 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-500.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_500.sbatch` and
+  `outputs/gpu-2336972/animator-audit-500-cpu-2341014.log`.
+- At **17:29 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the animator log reached update **522**. Final
+  evaluation record audit job **2339851** remained pending on `afterok:2336972`.
+  This CPU checkpoint audit inspected state and logged aggregate validation;
+  resumed execution, GPU inference and per-frame evaluation were outside its
+  scope. Local deformation learning starts after the configured warmup.
+  Animator training and its final evaluations remain incomplete.
+- At **18:25:33 KST**, CPU job **2341100 / cnode01** (`dell_cpu`, `cpu_qos`)
+  passed the **1,000-update** animator checkpoint audit. Latest/best both contain
+  update 1,000, with macro validation LPIPS **0.2878685507**, improved from
+  **0.3178930914** at update 500. All **1,008** inspected training records were
+  consecutive and finite. Configuration/input provenance, scheduler epoch 1,000,
+  RNG fields and **332** finite checked model/optimizer tensors per checkpoint
+  passed. All **147** frozen identity tensors still exactly matched the selected
+  identity checkpoint at update 10,000; model/training/auditor source hashes
+  matched the readiness record.
+- The saved end-of-warmup optimizer has **12 global states at step 1,000**,
+  with no states for the **127 local** or **8 unused final-context** parameter
+  tensors, as expected. Updates 501–1,000 averaged **6.766 s**. Local deformation
+  training began at update **1,001**, with RGB, mask, LPIPS and structural losses
+  added alongside rotation and projection. Observed updates 1,001–1,007 took
+  **7.93–8.46 s** each. Maximum logged per-update allocation across the 1,008
+  inspected records, including early local updates, was **4.81 GiB**; unlogged
+  validation and transient peaks are outside this measurement.
+- CPU inspection took **15.64 s**; Slurm reported `COMPLETED`, exit code 0 and
+  **25 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-1000.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_1000.sbatch` and
+  `outputs/gpu-2336972/animator-audit-1000-cpu-2341100.log`.
+  At **18:25 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the log reached update **1,013**. Final evaluation
+  record audit job **2339851** remained pending on `afterok:2336972`. This audit
+  inspects saved checkpoint state and logged aggregate validation; it does not
+  execute resume, GPU inference or per-frame evaluation. Full-run local optimizer
+  state will be checked after its first scheduled checkpoint at update **1,500**.
+  Animator training and final evaluations remain incomplete.
+- At **18:29 KST**, final animator checkpoint audit job **2341102** was confirmed
+  pending on `afterok:2336972` in `dell_cpu` / `cpu_qos` (one CPU, 12 GiB,
+  10-minute limit). It will inspect update-10,000 latest and selected best
+  checkpoints using the existing animator auditor, including global step
+  **10,000**, local step **9,000**, eight unused parameter tensors without states,
+  and exact frozen-identity equality. This supplements the already queued final
+  evaluation-record audit **2339851**. Wrapper/submission log:
+  `outputs/gpu-2336972/audit_animator_10000.sbatch` and
+  `animator-audit-10000-submission.log`. These final audits have not run yet.
+  Animator training continued through update **1,037** in the existing session.
+- At **19:32:16 KST**, CPU job **2341203 / cnode01** (`dell_cpu`, `cpu_qos`)
+  passed the **1,500-update** animator checkpoint audit. All **1,505** inspected
+  records were consecutive and finite. Latest contains update 1,500 with **139
+  optimizer states**: **12 global states at step 1,500** and **127 local states
+  at step 500**. The eight unused final-context parameter tensors still have no
+  optimizer states. Latest had **713** finite checked model/optimizer tensors.
+  Best remains at update 1,000 with **332** finite checked tensors and the same
+  checkpoint hash recorded by the prior audit. Both checkpoints passed
+  configuration/input provenance, scheduler and RNG checks; all **147** frozen
+  identity tensors exactly matched the selected identity model at update 10,000.
+  Model/training/auditor source hashes matched the readiness record.
+- Logged macro validation LPIPS at update 1,500 was **0.2983413507**, worse than
+  **0.2878685507** at update 1,000. The best checkpoint therefore remains the
+  end-of-warmup model; local training has not yet improved its validation score.
+  Local updates 1,001–1,500 averaged **8.011 s**; maximum logged per-update
+  allocation through the inspected records was **4.81 GiB**, excluding unlogged
+  validation and transient peaks. The configured training schedule continues.
+- CPU inspection took **17.98 s**; Slurm reported `COMPLETED`, exit code 0 and
+  **27 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-1500.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_1500.sbatch` and
+  `outputs/gpu-2336972/animator-audit-1500-cpu-2341203.log`.
+  At **19:32 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the log had reached update **1,509**. Both final CPU
+  audits, **2339851** (evaluation records) and **2341102** (animator checkpoints),
+  remained pending on `afterok:2336972`. This CPU audit inspects saved state and
+  logged aggregate validation; it does not execute resume, GPU inference or
+  per-frame evaluation. Animator training and final evaluations remain incomplete.
+- At **20:40:43 KST**, CPU job **2341321 / cnode02** (`dell_cpu`, `cpu_qos`)
+  passed the **2,000-update** animator checkpoint audit. All **2,010** inspected
+  records were consecutive and finite. Latest contains update 2,000 with **139
+  optimizer states**: **12 global states at step 2,000** and **127 local states
+  at step 1,000**, with no states for the eight unused final-context parameter
+  tensors. Latest had **713** finite checked model/optimizer tensors. Best
+  remains at update 1,000 with **332** finite checked tensors and its unchanged
+  checkpoint hash. Both checkpoints passed configuration/input provenance,
+  scheduler and RNG checks, and all **147** frozen identity tensors exactly
+  matched the selected identity model at update 10,000. Model/training/auditor
+  source hashes matched the readiness record.
+- Macro validation LPIPS at update 2,000 was **0.2895584375**, improved from
+  **0.2983413507** at update 1,500 but still above the best **0.2878685507** at
+  update 1,000. Updates 1,501–2,000 averaged **8.076 s**; maximum logged per-update
+  allocation through the inspected records was **4.81 GiB**, excluding unlogged
+  validation and transient peaks. CPU inspection took **17.81 s**; Slurm reported
+  `COMPLETED`, exit code 0 and **26 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-2000.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_2000.sbatch` and
+  `outputs/gpu-2336972/animator-audit-2000-cpu-2341321.log`.
+- At **20:40 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; by **20:41 KST**, the log reached update **2,016**.
+  Both final CPU audits (**2339851** and **2341102**) remained pending on
+  `afterok:2336972`. This CPU audit inspects saved state and logged aggregate
+  validation; it does not execute resume, GPU inference or per-frame evaluation.
+  Animator training and final evaluations remain incomplete.
+- At **21:48:24 KST**, CPU job **2341737 / cnode02** (`dell_cpu`, `cpu_qos`)
+  passed the animator checkpoint audit at **update 2,500**. All **2,510** inspected
+  records were consecutive and finite. Latest contains update 2,500 with **139
+  optimizer states**: **12 global states at step 2,500** and **127 local states
+  at step 1,500**, with no states for the eight unused final-context parameter
+  tensors. Latest had **713** finite checked model/optimizer tensors. Best remains
+  at update 1,000 with **332** finite checked tensors and its unchanged checkpoint
+  hash. Both checkpoints passed configuration/input provenance, scheduler and RNG
+  checks, and all **147** frozen identity tensors exactly matched the selected
+  identity model at update 10,000. Model/training/auditor source hashes matched
+  the readiness record.
+- Macro validation LPIPS at update 2,500 was **0.2947158352**, worse than
+  **0.2895584375** at update 2,000 and the best **0.2878685507** at update 1,000.
+  Local training has not yet surpassed the validation score from the end of
+  warmup. Updates 2,001–2,500 averaged **8.080 s**; maximum logged per-update
+  allocation through the inspected records was **4.81 GiB**, excluding unlogged
+  validation and transient peaks. CPU inspection took **17.94 s**; Slurm reported
+  `COMPLETED`, exit code 0 and **26 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-2500.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_2500.sbatch` and
+  `outputs/gpu-2336972/animator-audit-2500-cpu-2341737.log`.
+- At **21:48 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the log reached update **2,516**. Both final CPU
+  audits (**2339851** and **2341102**) remained pending on `afterok:2336972`.
+  This CPU audit inspects saved state and logged aggregate validation; it does
+  not execute resume, GPU inference or per-frame evaluation. Animator training
+  and final evaluations remain incomplete.
+- With three validations after warmup still above the best score at update 1,000,
+  CPU job **2341859 / cnode02** (`dell_cpu`, `cpu_qos`) inspected parameter changes
+  and stored Adam moments at **22:31:33 KST**. It compared latest at **2,500**
+  with best at **1,000**, first requiring their hashes to match the completed
+  checkpoint audit. Parameter names/groups came from that audit's saved mapping.
+  Training, model code, configuration and schedule were unchanged.
+- All **127 local** and **12 global** parameter tensors had changed values and
+  nonzero first and second Adam moments. The **eight unused final-context**
+  parameter tensors had no optimizer states and were exactly unchanged. All
+  **147** frozen identity tensors were equal. Local changes covered
+  **123,603,441 of 123,603,466** elements, with maximum absolute change
+  **0.0610454**. This establishes parameter updates and retained gradient history
+  in all local parameter tensors. Moments are moving averages, and parameter
+  differences include weight decay; these checks do not assess animation quality,
+  generalization, or LUNA fidelity, or identify the reason for the validation
+  plateau. No rendering or resumed execution was performed.
+- The same compute job formatted the inspection script and passed Ruff checks.
+  CPU inspection took **11.19 s**; Slurm reported `COMPLETED`, exit code 0 and
+  **19 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-optimizer-activity-2500.json`; source/wrapper/log:
+  `outputs/gpu-2336972/inspect_animator_optimizer.py`,
+  `inspect_animator_activity_2500.sbatch` and
+  `animator-activity-2500-cpu-2341859.log`. The receipt includes source/checkpoint
+  hashes and statistics for all 147 animator parameter tensors. The training
+  log reached update **2,837** at **22:32 KST**; the full run remains incomplete.
+- At **22:55:51 KST**, CPU job **2341916 / cnode02** (`dell_cpu`, `cpu_qos`)
+  passed the animator checkpoint audit at **update 3,000**. All **3,008** inspected
+  records were consecutive and finite. Latest contains update 3,000 with **139
+  optimizer states**: **12 global states at step 3,000** and **127 local states
+  at step 2,000**, with no states for the eight unused final-context parameter
+  tensors. Latest had **713** finite checked model/optimizer tensors. Best remains
+  at update 1,000 with **332** finite checked tensors and its unchanged checkpoint
+  hash. Both checkpoints passed configuration/input provenance, scheduler and RNG
+  checks, and all **147** frozen identity tensors exactly matched the selected
+  identity model at update 10,000. Model/training/auditor source hashes matched
+  the readiness record.
+- Macro validation LPIPS at update 3,000 was **0.2918068133**, improved from
+  **0.2947158352** at update 2,500 but still above the best **0.2878685507** at
+  update 1,000. Updates 2,501–3,000 averaged **8.089 s**; maximum logged per-update
+  allocation through the inspected records was **4.81 GiB**, excluding unlogged
+  validation and transient peaks. CPU inspection took **17.68 s**; Slurm reported
+  `COMPLETED`, exit code 0 and **25 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-3000.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_3000.sbatch` and
+  `outputs/gpu-2336972/animator-audit-3000-cpu-2341916.log`.
+- At **22:56 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the log reached update **3,018**. Both final CPU
+  audits (**2339851** and **2341102**) remained pending on `afterok:2336972`.
+  This CPU audit inspects saved state and logged aggregate validation; it does
+  not execute resume, GPU inference or per-frame evaluation. Animator training
+  and final evaluations remain incomplete.
+
+## 2026-09-28 — Yonsei NeuMan animator training progress
+
+- At **00:03:25 KST**, CPU job **2342083 / cnode02** (`dell_cpu`, `cpu_qos`)
+  passed the animator checkpoint audit at **update 3,500**. All **3,507** inspected
+  records were consecutive and finite. Latest had **139 optimizer states**:
+  **12 global states at step 3,500** and **127 local states at step 2,500**,
+  with no states for the eight unused final-context parameter tensors. Its
+  **713** checked model/optimizer tensors were finite. Best remains at update
+  1,000 with **332** finite checked tensors and its unchanged checkpoint hash.
+  Configuration/input provenance, scheduler and RNG checks passed for both;
+  all **147** frozen identity tensors exactly matched the selected identity
+  model at update 10,000. Model, training and auditor hashes matched the
+  readiness record.
+- Macro validation LPIPS at update 3,500 was **0.2915669389**, improved from
+  **0.2918068133** at update 3,000 but still above the best **0.2878685507** at
+  update 1,000. Updates 3,001–3,500 averaged **8.061 s**; maximum logged per-update
+  allocation was **4.81 GiB**, excluding unlogged validation and transient peaks.
+  CPU inspection took **18.60 s**; Slurm reported `COMPLETED`, exit code 0 and
+  **27 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-3500.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_3500.sbatch` and
+  `outputs/gpu-2336972/animator-audit-3500-cpu-2342083.log`.
+- At **00:03 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the log reached update **3,510**. Both final CPU
+  audits (**2339851** and **2341102**) remained pending on `afterok:2336972`.
+  This CPU audit inspects saved state and logged aggregate validation; it does
+  not execute resume, GPU inference or per-frame evaluation. Animator training
+  and final evaluations remain incomplete.
+- At **01:10:52 KST**, CPU job **2342295 / cnode01** (`dell_cpu`, `cpu_qos`)
+  passed the animator checkpoint audit at **update 4,000**. All **4,008** inspected
+  records were consecutive and finite. Latest had **139 optimizer states**:
+  **12 global states at step 4,000** and **127 local states at step 3,000**,
+  with no states for the eight unused final-context parameter tensors. Its
+  **713** checked model/optimizer tensors were finite. Best remains at update
+  1,000 with **332** finite checked tensors and its unchanged checkpoint hash.
+  Configuration/input provenance, scheduler and RNG checks passed for both;
+  all **147** frozen identity tensors exactly matched the selected identity
+  model at update 10,000. Model, training and auditor hashes matched the
+  readiness record.
+- Macro validation LPIPS at update 4,000 was **0.2894499593**, improved from
+  **0.2915669389** at update 3,500 but still above the best **0.2878685507** at
+  update 1,000. Updates 3,501–4,000 averaged **8.047 s**; maximum logged per-update
+  allocation was **4.81 GiB**, excluding unlogged validation and transient peaks.
+  CPU inspection took **18.40 s**; Slurm reported `COMPLETED`, exit code 0 and
+  **28 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-4000.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_4000.sbatch` and
+  `outputs/gpu-2336972/animator-audit-4000-cpu-2342295.log`.
+- At **01:10 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the log reached update **4,011**. At **01:11 KST**,
+  both final CPU audits (**2339851** and **2341102**) remained pending on
+  `afterok:2336972`. This CPU audit inspects saved state and logged aggregate
+  validation; it does not execute resume, GPU inference or per-frame evaluation.
+  Animator training and final evaluations remain incomplete.
+- At **01:18 KST**, source inspection confirmed that scheduled validation and
+  standalone evaluation both call `evaluate` with the full animator forward
+  path (`global_only=False`) and fixed manifest reference frames, including
+  during warmup. The warmup switch restricts optimization; the local output
+  layer starts at zero. This resolves the evaluation control-flow question,
+  without identifying the cause of the validation plateau. No new rendering
+  or numerical replay test was run. The log reached update **4,067** during
+  this review. Details: [Yonsei code review](yonsei-code-review.md#validation-during-animator-warmup).
+- At **02:18:41 KST**, CPU job **2342359 / cnode01** (`dell_cpu`, `cpu_qos`)
+  passed the animator checkpoint audit at **update 4,500**. All **4,510** inspected
+  records were consecutive and finite. Latest had **139 optimizer states**:
+  **12 global states at step 4,500** and **127 local states at step 3,500**,
+  with no states for the eight unused final-context parameter tensors. Its
+  **713** checked model/optimizer tensors were finite. Best remains at update
+  1,000 with **332** finite checked tensors and its unchanged checkpoint hash.
+  Configuration/input provenance, scheduler and RNG checks passed for both;
+  all **147** frozen identity tensors exactly matched the selected identity
+  model at update 10,000. Model, training and auditor hashes matched the
+  readiness record.
+- Macro validation LPIPS at update 4,500 was **0.2934468499**, higher than
+  **0.2894499593** at update 4,000 and the best **0.2878685507** at update 1,000.
+  Updates 4,001–4,500 averaged **8.043 s**; maximum logged per-update allocation
+  was **4.81 GiB**, excluding unlogged validation and transient peaks. CPU
+  inspection took **18.62 s**; Slurm reported `COMPLETED`, exit code 0 and
+  **27 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-4500.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_4500.sbatch` and
+  `outputs/gpu-2336972/animator-audit-4500-cpu-2342359.log`.
+- At **02:18 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the log reached update **4,514**. At **02:19 KST**,
+  both final CPU audits (**2339851** and **2341102**) remained pending on
+  `afterok:2336972`. This CPU audit inspects saved state and logged aggregate
+  validation; it does not execute resume, GPU inference or per-frame evaluation.
+  Animator training and final evaluations remain incomplete.
+- At **03:26:32 KST**, CPU job **2342422 / cnode01** (`dell_cpu`, `cpu_qos`)
+  passed the animator checkpoint audit at **update 5,000**. All **5,011** inspected
+  records were consecutive and finite. Latest and best both contain update 5,000,
+  each with **139 optimizer states**: **12 global states at step 5,000** and
+  **127 local states at step 4,000**. The eight unused final-context parameter
+  tensors have no states. Each checkpoint had **713** finite checked
+  model/optimizer tensors. Configuration/input provenance, scheduler and RNG
+  checks passed; all **147** frozen identity tensors exactly matched the selected
+  identity model at update 10,000. Model, training and auditor hashes matched
+  the readiness record.
+- Macro validation LPIPS reached a new best of **0.2823003116**, improving from
+  **0.2934468499** at update 4,500 and surpassing the previous best
+  **0.2878685507** at update 1,000 for the first time. The selected checkpoint
+  now includes **4,000 local optimizer updates**. Updates 4,501–5,000 averaged
+  **8.065 s**; maximum logged per-update allocation was **4.81 GiB**, excluding
+  unlogged validation and transient peaks. CPU inspection took **21.91 s**;
+  Slurm reported `COMPLETED`, exit code 0 and **30 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-5000.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_5000.sbatch` and
+  `outputs/gpu-2336972/animator-audit-5000-cpu-2342422.log`.
+- At **03:26 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the log reached update **5,017**. At **03:27 KST**,
+  both final CPU audits (**2339851** and **2341102**) remained pending on
+  `afterok:2336972`. This CPU audit inspects saved state and logged aggregate
+  validation; it does not execute resume, GPU inference or per-frame evaluation.
+  Animator training and final evaluations remain incomplete.
+- At **04:33:18 KST**, CPU job **2342598 / cnode01** (`dell_cpu`, `cpu_qos`)
+  passed the animator checkpoint audit at **update 5,500**. All **5,505** inspected
+  records were consecutive and finite. Latest has **139 optimizer states**:
+  **12 global states at step 5,500** and **127 local states at step 4,500**.
+  Best remains at update 5,000 with global step 5,000, local step 4,000 and its
+  unchanged checkpoint hash. Each checkpoint had **713** finite checked
+  model/optimizer tensors; the eight unused final-context parameter tensors
+  have no states. Configuration/input provenance, scheduler and RNG checks
+  passed; all **147** frozen identity tensors exactly matched the selected
+  identity model at update 10,000. Model, training and auditor hashes matched
+  the readiness record.
+- Macro validation LPIPS at update 5,500 was **0.2838224147**, above the best
+  **0.2823003116** at update 5,000. Updates 5,001–5,500 averaged **8.068 s**;
+  maximum logged per-update allocation was **4.81 GiB**, excluding unlogged
+  validation and transient peaks. CPU inspection took **20.95 s**; Slurm
+  reported `COMPLETED`, exit code 0 and **29 s** total runtime. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-5500.json`; wrapper/log:
+  `outputs/gpu-2336972/audit_animator_5500.sbatch` and
+  `outputs/gpu-2336972/animator-audit-5500-cpu-2342598.log`.
+- At **04:33 KST**, GPU job **2336972** remained `RUNNING` on node32 with one
+  RTX 4090 and `Restarts=0`; the log reached update **5,508**. Both final CPU
+  audits (**2339851** and **2341102**) remained pending on `afterok:2336972`.
+  This CPU audit inspects saved state and logged aggregate validation; it does
+  not execute resume, GPU inference or per-frame evaluation. Animator training
+  and final evaluations remain incomplete.
+- At the user's request, Slurm step **2336972.7 / node32 / RTX 4090** rendered
+  all **41 held-out test frames across six scenes**, using identity best
+  **10,000** and animator best **5,000**. It exited 0 at approximately
+  **05:14 KST** after **53.10 s**, with **2.36 GiB** peak PyTorch allocation.
+  It shared the existing allocation after a compute-node memory check, with
+  a 25% allocator cap; training continued and the parent job remained
+  `RUNNING`, `Restarts=0`. Some concurrent updates slowed (observed 9.14 s).
+  No additional GPU was requested. Ruff checks passed on the compute node.
+- New script `scripts/render_qualitative.py` calls the existing evaluation
+  forward/render path, with fixed training references and cached features.
+  The identity column uses fitted SMPL poses; the animator column uses driving
+  images, without target pose in its forward pass. All 147 identity tensors
+  match the selected identity model. Checkpoint hashes match prior audits;
+  configuration/manifest/body/data/feature provenance checks passed.
+- Outputs: `outputs/gpu-2336972/qualitative-animator-5000/`, including raw
+  512px RGB/alpha images, two overview sheets, per-scene first/middle/last
+  sheets, six GIFs, `report.json`, and a compact exact-weight snapshot.
+  Selection is deterministic by frame order, independent of scores. The GIFs
+  show sparse held-out frames at 2 fps playback, not verified capture FPS.
+- Identity test PSNR/SSIM/mask IoU were **21.969632 / 0.912442 / 0.894933**,
+  matching the completed identity evaluation aggregates. Animator checkpoint
+  5,000 gave **11.855348 / 0.820338 / 0.333725**. These are scene-macro metrics;
+  this preview did not rerun LPIPS.
+- Both overview sheets were visually inspected. Identity renders retain
+  recognizable clothing/body shape but have blurry faces and surface artifacts.
+  **Animator samples remain near a T-pose and fail to follow limb articulation.**
+  Checkpoint integrity and optimizer activity do not establish animation
+  quality. This qualitative failure is now recorded; its cause is unresolved.
+  Source inspection confirms the full local path is enabled and `delta_mu`
+  has no displacement clamp. No core model/training/configuration change or
+  training restart was made.
+- At **05:20:27 KST**, Slurm step **2336972.8 / node32** completed an 18-frame
+  training-set articulation diagnostic (10.24 s; 2,590,371,840 bytes peak
+  allocation). Animator 5,000 returned the identical local offset
+  `[-0.126953125, -0.06982421875, -0.09228515625]` meters for every point and
+  inspected frame. Spatial variation and variation across 12 driver pairs
+  were exactly zero, despite differing motion features and teacher offsets.
+  Receipt: `outputs/gpu-2336972/animator-articulation-5000.json`.
+- At **05:23:37 KST**, step **2336972.9 / node32** completed a six-frame
+  decoder/gradient diagnostic (5.01 s; 2,702,356,480 bytes peak allocation).
+  All first-layer pre-SiLU values were below -20 (range -254 to -22.25),
+  suppressing the point-dependent signal. Local-input gradient L2 norms were
+  3.68e-14–7.89e-14; a local-MLP-only FP32 comparison behaved similarly.
+  Isolated input normalization raised gradients to 3.80e-7–9.76e-7. No optimizer
+  update was performed, and parameters were checked unchanged. This establishes
+  the immediate saturation mechanism, not a verified training repair.
+  Receipt: `outputs/gpu-2336972/animator-decoder-5000.json`; combined statistics:
+  `animator-diagnostics-5000-summary.json` (computed on a CPU Slurm step).
+- At **05:29:17 KST**, step **2336972.10 / node32** completed a controlled
+  two-frame probe with 128 updates per original/normalized variant, identical
+  starting weights, fresh AdamW, full existing loss, batch two and constant
+  LR 0.0004. It ran for 88.15 s with 4,418,174,464 bytes peak allocation.
+  Baseline LPIPS on bike training frames 00001/00051 ended at 0.20675/0.11493;
+  normalized LPIPS was 0.20320/0.09922. Mask IoU was 0.53126/0.63498 versus
+  0.58628/0.77576. **Both rendered variants still failed limb articulation**;
+  the metric improvement did not establish a repair. The comparison sheet
+  was inspected. Outputs: `outputs/gpu-2336972/normalization-probe-5000/`.
+  This is training-frame fitting, not held-out performance. The main training
+  process, checkpoints and core source remain unchanged.
+- At **05:37:25 KST**, step **2336972.12 / node32** completed a fresh-local-branch
+  probe, 512 updates per original/normalized variant, using the same two bike
+  training frames, identical local initialization and retained initial global
+  heads/identity. Both variants used fresh AdamW, batch two and constant
+  LR 0.0004. Runtime was **304.06 s**; peak allocation **4,418,174,464 bytes**.
+  Original-architecture final LPIPS was **0.07242 / 0.05429**, mask IoU
+  **0.91277 / 0.83143**. The normalized variant gave **0.13559 / 0.06639** and
+  **0.76590 / 0.82803**. The comparison sheet was inspected: the fresh original
+  branch learned visible arm/leg motion with surface artifacts; normalization
+  performed worse and retained more T-pose structure. This supports the
+  architecture's ability to fit these two frames after reinitialization, but
+  does not establish a full-scene repair or generalization. Artifacts:
+  `outputs/gpu-2336972/fresh-local-probe-5000/`. No main-run/core-source change
+  was made; a user preference was requested before changing the agreed
+  10,000-update baseline to a repair/retraining workflow.
+- At **05:42:50 KST**, CPU job **2342764 / cnode01** (`dell_cpu`, `cpu_qos`)
+  passed the **update 6,000** checkpoint audit. All **6,004** inspected records
+  were consecutive and finite. Latest had **139 optimizer states** (12 global
+  at step 6,000; 127 local at step 5,000), with no states for the eight unused
+  final-context parameter tensors. Best remained at 5,000 with global/local
+  steps 5,000/4,000 and its unchanged hash. Each checkpoint had **713** finite
+  model/optimizer tensors and all **147** identity tensors matched identity
+  best 10,000. Configuration/input/scheduler/RNG checks passed; model/training/
+  auditor hashes matched readiness.
+- Update 6,000 validation LPIPS was **0.2831695214**, above best
+  **0.2823003116** at 5,000. Updates 5,501–6,000 averaged **8.316 s**, including
+  overlapping qualitative/diagnostic jobs; this is not standalone throughput.
+  Maximum logged per-update allocation was **4.81 GiB**, excluding unlogged
+  validation and other processes. CPU inspection took **21.75 s**; the job
+  completed with exit 0 in **30 s**. Receipt:
+  `outputs/gpu-2336972/animator-training-progress-6000.json`; log:
+  `outputs/gpu-2336972/animator-audit-6000-cpu-2342764.log`.
+- At **05:43 KST**, GPU job **2336972** remained `RUNNING` on node32, one
+  RTX 4090, `Restarts=0`; the log reached **6,007** during inspection. Both
+  final CPU audits remained pending on `afterok:2336972`. The integrity audit
+  does not resolve the observed articulation failure. Training continues under
+  the agreed configuration while the user's experimental-priority choice is
+  pending; no change of the main run or core model source has been made.
+- At **05:46:44 KST**, step **2336972.13 / node32** rechecked **animator latest
+  6,000** on the same 18 non-reference training frames. Its hash matched the
+  completed CPU audit before exact compact inference weights were preserved.
+  The diagnostic exited 0 in **10.39 s** (excluding snapshot preparation),
+  using **2,590,371,840 bytes** peak allocation. All points/frames received
+  local offset `[-0.1162109375, -0.068359375, -0.09326171875]` meters: spatial
+  variation and variation over 12 driver pairs remained zero. The local-motion
+  collapse persisted after another 1,000 updates. Driver features and teacher
+  offsets continued to vary; no diagnostic optimizer update was performed.
+  The main training log reached 6,038 during inspection.
+- Artifacts: `outputs/gpu-2336972/animator-snapshot-6000.{pt,json}`,
+  `animator-articulation-6000.json`, `animator-articulation-6000-summary.json`,
+  `diagnose_articulation_6000.sh`, and `articulation-6000-step.log`. The summary
+  was calculated on a CPU-only Slurm step. Original model/configuration,
+  checkpoint selection and running schedule remain unchanged while the user's
+  experimental-priority choice is pending.
+- At the user's request, **September 28, 06:08:50 KST**, step **2336972.16 /
+  node32 / RTX 4090** rendered direct canonical identity outputs and their
+  image-driven animation using the preserved identity-10,000 / animator-5,000
+  snapshot. `scripts/render_identity_animation.py` computes canonical Gaussians
+  and tokens once per scene and reuses them for all **41 test driving frames**;
+  fitted target pose is not used by its inference path. Front/side/back virtual
+  views, exact canonical tensors, comparisons, raw frames, and sparse 2 fps
+  GIFs are under `outputs/gpu-2336972/identity-and-animation-5000/`.
+  It exited 0 after **25.47 s**, with **2.32 GiB** peak allocation. The first
+  launch stopped at import-order linting before inference; this was corrected,
+  and the second launch passed Ruff and completed. The display camera is an
+  explicitly recorded visualization assumption; actual geometry is unchanged.
+  Images show recognizable canonical appearance and the existing animation
+  failure. No model repair or new quality metrics are claimed. The main log
+  advanced to **6,201** during inspection; no core training change was made.
+- At **September 28, 06:24:14 KST**, Slurm step **2336972.17 / node32 / RTX
+  4090** completed the user's latest-identity train/test visualization request.
+  `scripts/render_identity_splits.py` used **identity latest 10,000**, verified
+  against the final identity log, and rendered all **344 train / 41 test**
+  frames. Direct canonical views/tensors, raw frame reconstructions, paired
+  train/test sheets, per-frame comparisons, full sparse-frame GIFs and local
+  HTML galleries are under `outputs/gpu-2336972/identity-10000-train-test/`.
+  Frame reconstruction applies the fitted SMPL teacher; no neural animator is
+  used. Both splits share four fixed training references per scene, with all
+  24 training targets that are references labeled. Overview targets exclude
+  references. The run passed Ruff and exited 0 in **74.50 s**, with **1.84 GiB**
+  peak allocation. Both full overview sheets were visually inspected; clothing
+  and fitted articulation are recognizable, with blurry faces/surface artifacts.
+- At **06:25:23 KST**, CPU-only step **2336972.18** exited 0 after auditing
+  visualization completeness: 385 frames, 1,540 per-frame image files, canonical
+  views, exact GIF frame counts, and all **1,638** inventory hashes/sizes.
+  The identity latest hash still matched the rendered checkpoint. Executing
+  the pinned official NeuMan split function with a metadata-only reader in
+  its inspected video order reproduced every manifest filename, including
+  the **44 validation** frames. The full upstream geometry reader was not
+  executed; source data were not modified. Receipt:
+  `outputs/gpu-2336972/identity-train-test-10000-audit.json`. At **06:25:52 KST**,
+  the original animator was live at **6,327** with both final CPU audits
+  pending. The visualization task is complete; animator training and its known
+  articulation failure remain separate from this result.
+- At **September 28, 07:13:03 KST**, CPU-only Slurm step **2336972.19 /
+  node32** completed the user's requested GIF layout: **ground truth |
+  canonical identity render | fitted SMPL pose (LBS)**. All **12 GIFs** include
+  every **344 train / 41 test** frame, using the unchanged latest identity
+  10,000. The canonical front view is fixed; the third panel reuses the actual
+  fitted SMPL/LBS identity render. Playback is 5 fps display timing, without
+  interpolation; training frames used as references are labeled. Source PNGs
+  and existing galleries were preserved.
+- `scripts/make_identity_gifs.py` passed Ruff and exited 0 after **17.85 s**.
+  It rechecked the latest checkpoint and log update, verified **776** consumed
+  source-image hashes/sizes, and decoded all GIF frames to check their counts
+  and 200 ms durations. The bike test GIF and jogging training preview were
+  visually inspected. Outputs and receipt:
+  `outputs/gpu-2336972/identity-10000-train-test-gifs/{index.html,report.json}`,
+  with `train/<scene>.gif` and `test/<scene>.gif`. No new GPU inference or
+  training modification was required.
+
+## Yonsei identity diagnosis and fresh retraining — September 28
+
+At the user's request, reviewed the training code and completed identity weights,
+then started a fresh identity run on a separately requested RTX 4090. The
+[full problem list, source distinctions and settings](identity-retraining.md)
+separate measured findings from proposed explanations.
+
+- New tmux/srun allocation **2343414**, **node31**, RTX 4090, tmux
+  `luna_identity_v2_20260928`. The original job remains on node32.
+- Diagnostics measured attention logits up to **1627.55**, foreground occupying
+  9.60–14.64% of inspected crops, full-run gradient clipping, and continued
+  validation improvement through the old 10k cutoff. The identity decoder did
+  not exhibit the animator's dead-SiLU failure. A 128-update direct-Gaussian
+  probe reduced one training target's LPIPS from 0.04921 to 0.00929; this is not
+  a trained encoder or a held-out result.
+- The new model uses Sapiens body/face features, identity Q/K RMS normalization,
+  FP32 Gaussian decoding, four target frames per canonical prediction, balanced
+  foreground/background RGB loss and a 20k schedule. Several settings change
+  together, so later gains cannot be attributed to one change without ablations.
+- All **429** new face feature files passed the compute-node preflight. Legacy
+  checkpoint strict loading passed. Two real updates on the full schedule were
+  followed by checkpoint inference and optimizer-state audit: **127 Adam states
+  at step 2**, finite parameters and valid Gaussians. A fresh process resumed at
+  update 2 and was confirmed executing with logs through **update 63**.
+- Peak allocated GPU memory: **10,400,449,536 bytes (9.69 GiB)**. Observed steady
+  updates take about 2.4–3.4 s. First validation is scheduled at 250; improved
+  identity quality has not yet been verified.
+- Run and immutable source/configuration:
+  `/scratch2/whwjdqls99/LUNA-open/runs/neuman-identity-v2-20260928/`.
+  Receipts: `provenance/preflight.json`, `provenance/update-2-audit.json`,
+  `identity/startup-000002.json`; live progress: `identity/train.jsonl`.
+- Follow-up `provenance/update-100-audit.json` passed strict loading, finite
+  identity tensors, valid Gaussian inference and **127 Adam states at step 100**.
+  Continued execution was observed through update **140**.
+
+## Yonsei identity batch throughput experiment (2026-09-28)
+
+The user requested a new RTX 4090 `srun` in tmux to try a larger actual GPU
+batch. Job **2344049**, node40, compared five execution variants using a saved
+identity-v2 checkpoint at update **4,900**, the same effective batch of 16,
+and 20 timed optimizer updates per variant across two reversed-order rounds.
+
+- Current serial: **2.183 s/update**, **9.68 GiB** peak allocated.
+- Two identities per encoder call: **2.187 s/update**, **17.19 GiB**.
+- One identity with batched target losses: **2.115 s/update**, **9.68 GiB**.
+- Two identities with batched target losses: **2.112 s/update**, **17.19 GiB**.
+- Larger encoder batches fit but add no meaningful throughput. Almost all of
+  the approximately 3% gain comes from batching target supervision. A separate
+  profile attributes approximately 69% of CUDA operator time to FlashAttention.
+- Finite-gradient checks passed, but batching is not bitwise equivalent. A
+  strict loss-gradient comparison initially failed with default TF32 cuDNN;
+  disabling TF32 for that isolated check passed. See the complete numerical
+  differences and limitations in [identity-batching.md](identity-batching.md).
+- The running identity experiment on node31/job 2343414 continued with its
+  preserved source. Performance measurements are not held-out quality results.
+- Source snapshots, checkpoint, reports and logs:
+  `/scratch2/whwjdqls99/LUNA-open/outputs/gpu-2344049/identity-batching/`.
+
+## Presentation report and consolidated qualitative download — September 28
+
+Created the [presentation package](presentation-package.md): approximately
+4,856-word step-by-step report, 29 starter slides, quantitative charts and CSVs,
+2,344 copied/generated qualitative assets including 48 GIFs, frozen raw metrics
+and audit evidence. All files are in one portable folder and a **175,751,140-byte**
+ZIP under `/scratch2/whwjdqls99/LUNA-open/reports/`.
+
+For the report, independently rendered original identity 10k and revised best
+10,250 on the same **44 validation frames**. All existing metric aggregates
+matched saved evaluations. Newly measured foreground L1 was **0.101929 →
+0.088814**, about **12.9% lower**; validation LPIPS was **0.057964 → 0.054320**.
+The six subjects, fixed references, target cameras/crops, fitted LBS poses and
+overview selection rule are recorded. Added six old/new GIFs and six
+GT/canonical/LBS GIFs. No new animator or revised test-set evaluation is implied.
+
+CPU-only setup/copying/build/packaging ran on cnode01; inference was a step in
+the existing node31 allocation (53.55 s, 1.90 GiB peak). All 2,505 local report
+and gallery links resolved, GIF frames decoded, expected frame counts matched,
+and the final ZIP passed CRC verification. See the package index for exact
+hashes, job IDs, scope and PowerPoint verification limitations.
+
+## Released LHM versus latest selected identity — Yonsei, September 28
+
+Completed the [native LHM-500M comparison](lhm-neuman-evaluation.md) on all
+41 official test frames, six scenes, 512×512 crops. NeuMan's supplied segmentation
+masks define reference/target white backgrounds and crops; predicted renders
+retain their own alpha. LHM gets the first fixed training reference; ours gets
+four and was trained on these same six identities. LHM receives no local
+fine-tuning; its pretraining overlap is unknown. This is a local comparison,
+not the LUNA paper's benchmark or unpublished MV-LHM. LHM++ was evaluated in
+the subsequent experiment below.
+
+| Method | PSNR ↑ | Full-crop L1 ↓ | Foreground L1 ↓ | SSIM ↑ | LPIPS ↓ | IoU ↑ |
+|---|---:|---:|---:|---:|---:|---:|
+| LHM-500M, 1 reference | 19.8613 | 0.024574 | 0.130060 | 0.897883 | 0.094337 | 0.857138 |
+| Our identity 14,750, 4 references | 22.3087 | 0.016576 | 0.095552 | 0.917392 | 0.053251 | 0.900398 |
+
+Each number averages per-frame metrics within a scene, then weights scenes
+equally. The new identity snapshot was frozen from validation-best at 19:45 KST
+(validation LPIPS 0.05379501); training continued independently. Exact source
+and snapshot hashes are in the evaluation record. Scores use the common PNG
+interface, which introduces small quantization differences from float renders.
+
+All 47 body conversions passed: mean mesh residual 3.5215 mm and projection
+residual 0.7104 pixels. The native camera check had zero projected-point error
+and at most 2.15e-6 RGB difference from direct gsplat. Native LHM used its released
+stored-weight skinning behavior, frozen reconstruction checkpoint, Sapiens and
+face restoration. The separate RTX 4090 allocation was 2345649 on node33,
+inside tmux `luna_lhm_20260928`; no heavy work ran on the login node.
+
+Portable results: `/scratch2/whwjdqls99/LUNA-open/reports/lhm-neuman-comparison-20260928/`
+and adjacent ZIP (**29,366,730 bytes**), SHA256
+`94348a676b906b34a446854b483f9cae884a612585db883c17983280abe2d198`.
+Includes 12 GIFs, all comparison frames and raw RGB/alpha, canonical views,
+references, body-fit overlays, per-frame JSON, CSV, and PSNR/L1/foreground-L1/LPIPS
+charts. All 95 local HTML links resolved, 351 images decoded, GIF frame counts
+matched, metric aggregates independently matched, and the ZIP passed CRC.
+The portable charts and GIFs can be inserted into the earlier presentation.
+
+## Released LHM++ added to the fixed comparison — Yonsei, September 28
+
+Completed native **LHM++-700M + DPT** inference and common scoring on the same
+41 official test frames. It receives exactly the four training references used
+by our frozen identity update 14,750. No local fine-tuning, test RGB fitting or
+GT-mask cleanup of predictions. The square reference input and 518-to-512 DPT
+canvas adaptation are explicit in the [full record](lhmpp-neuman-evaluation.md).
+
+| Method | PSNR ↑ | L1 ↓ | FG L1 ↓ | BG L1 ↓ | SSIM ↑ | LPIPS ↓ | IoU ↑ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| LHM-500M | 19.8613 | 0.024574 | 0.130060 | 0.009851 | 0.897883 | 0.094337 | 0.857138 |
+| LHM++-700M + DPT | 19.7052 | 0.022649 | 0.161999 | 0.003007 | 0.904646 | 0.078863 | 0.804912 |
+| Our identity 14750 | 22.3087 | 0.016576 | 0.095552 | 0.005558 | 0.917392 | 0.053251 | 0.900398 |
+
+Equal-weight scene means; LHM uses one reference, the other two use four.
+Only ours is locally trained on the six identities. LHM++ gives smoother visual
+results than our noisy splats while several exact-frame metrics are worse.
+Compared with LHM, its foreground L1 worsens despite improved full-crop L1 and
+LPIPS; record foreground and background errors separately when interpreting it.
+
+Job **2345975**, node37, one RTX 4090 requested through `srun` in tmux
+`luna_lhmpp_20260928`. Full inference and evaluator exited zero. The native
+camera check passed with zero projected-point error and max RGB discrepancy
+2.15e-6. All 1,324 active checkpoint tensors loaded; 160,000 Gaussians per scene.
+The complete successful export took **114.557 s** after imports and used
+**5.03 GiB** peak allocated GPU memory; this is not a cross-method speed test.
+GPU allocation was released after scoring. CPU preparation/report job 2345977
+on cnode01 performed acquisition, hashes, builds and media packaging.
+
+Report generation and package verification are recorded in the linked evaluation
+record. Outputs are under
+`/scratch2/whwjdqls99/LUNA-open/reports/neuman-final-comparison-20260928/`.
+The completed package contains a 27-slide editable PowerPoint, 18 GIFs, all
+seven metrics and 123 per-frame records. CPU checks passed for 103 local links,
+527 images, all GIF frames, metric aggregates, PPTX bounds/embedded media and
+ZIP CRC. All slide previews were visually inspected; actual Office playback
+was not executed. Adjacent ZIP: **55,083,618 bytes**, SHA256
+`611b50be19aeff076777685a0ab5bc738c7876822c104f90f4ee24186b9cfe61`.
+
+## 2026-09-28–29 — Yonsei baseline alignment investigation
+
+The user identified canonical misalignment and requested recalculation against
+LUNA **Table 1**, not its cross-identity experiment. Detailed methods, source
+scope, all metrics and downloads are in the
+[alignment investigation](alignment-investigation.md).
+
+Confirmed: the original canonical panels used different SMPL/SMPL-X pelvis
+origins, approximately 12.7 cm apart vertically. New native canonical orbits
+align body-model pelvis origins without fitting images. Scored target poses
+already contain fitted translations; their frozen benchmark remains unchanged.
+The native skeleton transforms match the converted SMPL-X model within
+0.000427 mm across all 47 converted frames for both baselines.
+
+Completed all 41 test frames in each diagnostic variant. Six-scene macro:
+
+| Method/diagnostic | PSNR ↑ | L1 ↓ | LPIPS ↓ |
+|---|---:|---:|---:|
+| LHM original crop | 19.8613 | 0.024574 | 0.094337 |
+| LHM root pose oracle | 21.5011 | 0.019576 | 0.084281 |
+| LHM root + joints oracle | 24.8947 | 0.013644 | 0.067397 |
+| LHM++ same-reconstruction control | 19.7043 | 0.022652 | 0.078866 |
+| LHM++ root pose oracle | 20.9642 | 0.019014 | 0.071228 |
+| LHM++ root + joints oracle | 24.3266 | 0.013090 | 0.053203 |
+| LHM unchanged render, original image canvas | 23.1590 | 0.011816 | 0.054540 |
+
+Pose oracles optimize evaluated RGB with fixed identity, shape, camera and
+network weights. They establish sensitivity, not replacement feed-forward
+scores. The bounded 80-step stages are not fully converged and can compensate
+for shape/clothing differences as well as pose. Canvas diagnostics change the
+scoring domain and resampling, not reconstruction. Exact paper scoring/fitting
+details remain unresolved. LHM++ is distinct from Table 1's MV-LHM.
+
+Additional completed checks: three 2D alignment families for all three methods,
+zero/fixed shape and tall-reference crop ablations for both released models,
+native-canvas sensitivity for all three methods, and 216 shared-frame canonical
+angle renders. Native LHM++ crop ablations are not paired by image-token-merging
+RNG state; its pose oracle has an exact same-reconstruction control.
+
+GPU job 2346749, node32, one RTX4090 via `srun` in tmux; all GPU scripts exited
+zero and the allocation completed/released at 00:10 KST. CPU work and packaging
+used job 2346750, cnode02. The user's training job 2343414 was not modified.
+Source copies and logs are retained; some formatting and the LHM++ extension
+were applied after earlier Python processes loaded their code, as disclosed.
+
+Package `/scratch2/whwjdqls99/LUNA-open/reports/alignment-investigation-20260928/`
+contains 31 metric variants, 1,271 per-frame records, 42 GIFs and a 14-slide PPTX.
+Independent CPU checks passed for metrics/aggregates, 627 PNGs, all GIF frame
+counts, 68 local links, PPTX bounds/text layout and ZIP CRC. All slide previews
+were visually inspected; native Office playback was not executed. ZIP size
+57,246,814 bytes, SHA256
+`49c086b6541042a2d35d67a172a70295e3fb8d914c7c9ad5ce7e7454c5385274`.
+
+### September 29 presentation revision
+
+User requested the four-row LHM/LHM++ Original/Pose refinement table. Added
+an editable table with those exact values as slide 11; the alignment addendum
+now has 15 slides. Preserved its test-RGB diagnostic footnote. Regenerated PDF,
+slide previews and portable ZIP on CPU job 2347294/cnode02, and visually inspected
+the new slide. No model evaluation was rerun. Previous deck/archive/receipts
+are backed up under `reports/revisions/`. Updated ZIP: 57,494,966 bytes, SHA256
+`24d220e36f638a7b01afdc7a9821a126542eb02e69d08a29aadf01e3e4468302`.
+
+### September 29 SMPL / SMPL-X audit without pose refinement
+
+Completed the [full geometry audit](smplx-geometry-audit.md): all 429 source
+SMPL meshes match NeuMan exactly; all 65 protocol annotations match raw source
+values within float precision; all 47 converted meshes independently reproduce
+3.5215 mm / 0.71042 px mean residual. Verified the actual checkpoint's dense
+point ordering, shape/skinning buffers, inverse bind and independent FK, then
+checked every learned Gaussian passed to the rasterizer on all 41 test frames
+per model. Maximum learned-position discrepancy is 0.000538 mm for LHM and
+0.000597 mm for LHM++. No additional integration error was found.
+
+Fresh unrefined scores: LHM 19.861324 PSNR / 0.02457417 L1 / 0.09433674 LPIPS;
+LHM++ 19.705531 / 0.02264993 / 0.07883946. LHM RGB is byte-identical to the
+original. The small LHM++ repeat difference is not a geometry improvement;
+historical RNG state was not retained. The PPT keeps its requested original
+table values. No held-out RGB optimization was performed in this audit.
+
+GPU job 2347410, node31, one RTX4090 via srun/tmux; completed and released
+03:33:47 KST. CPU 2347411, cnode02, independently checked saved-image PSNR/L1,
+foreground/background L1 and IoU for all 82 predictions and every aggregate.
+Artifacts: `diagnostics/smplx-audit-20260929/`. The source notes distinguish
+native LBS inverse approximation, remaining conversion residuals and unresolved
+paper evaluation details. Training job 2343414 was not modified.
+
+CPU allocation completed with exit 0 and was released at 03:36:13 KST. The
+audit ZIP `diagnostics/smplx-audit-20260929.zip` contains 195 files, 5,358,009
+bytes; CRC check passed, SHA256
+`5137121c67c59988dcc32f8af58b3e2bfcbbc5bde6e1da20597b3566fb7ca84b`.
+
+### September 29 shared shape fitted to training references
+
+Completed the [shared-shape diagnostic](shared-shape-experiment.md). Fit one
+10D SMPL-X beta per subject/model from four training references; freeze network
+weights, reconstructed Gaussian tensors, root/joint poses, translations and
+cameras. Test RGB is used only for scoring after shape selection. LHM identity
+reconstruction still uses one image, so its shape adaptation adds three training
+images; LHM++ uses four images for both stages. This is our adaptation protocol,
+not a published LUNA/LHM benchmark setting.
+
+| Method | Variant | PSNR ↑ | L1 ↓ | LPIPS ↓ |
+|---|---|---:|---:|---:|
+| LHM | Paired original | 19.861324 | 0.02457417 | 0.09433674 |
+| LHM | Shared fitted shape | 20.502465 | 0.02220209 | 0.09051491 |
+| LHM++ | Paired original | 19.704724 | 0.02265327 | 0.07885581 |
+| LHM++ | Shared fitted shape | 20.426451 | 0.02067840 | 0.07497404 |
+
+All 41 official test frames; equal mean over six subjects. Initial reference-mean
+shape alone gives no improvement. Widening beta-change bounds from ±5 to ±10
+changes fitted mean PSNR by <0.004 dB and eliminates bound hits for both models;
+the primary ±5 result is retained. All fits stopped by the predeclared training
+objective criterion at 200–350 steps.
+
+The result supports sensitivity to shape, without establishing incorrect beta
+as the main cause of image mismatch. CPU body correspondence errors increase
+from 3.514 mm to 22.934 mm (LHM) / 25.231 mm (LHM++) against supplied NeuMan
+meshes, which are fitted annotations rather than measured anatomical truth.
+LHM foreground L1 worsens despite full-crop L1 improving; LHM++ foreground L1
+improves. Earlier pose oracles fitted test RGB, so their gains are not a matched
+shape-versus-pose comparison with this training-only adaptation.
+
+The native photometric derivative has a magnitude discrepancy with finite
+differences. A first LHM++ preflight stopped before fitting; the preserved
+rerun separately checks posed-position derivatives and photometric descent
+direction, then selects beta by the actual forward objective. Neither exact
+renderer gradients nor global convergence are claimed. All frozen-cache and
+pose/camera invariance checks passed.
+
+GPU job 2348481, node36, one RTX4090 via srun/tmux, completed with exit 0 and
+released at 11:55:13 KST. CPU job 2348482, cnode02, handles reference conversions,
+independent body/image audits and packaging. Identity training job 2343414 was
+not modified. Artifacts: `diagnostics/shared-shape-20260929/`; download/report
+folder: `reports/shared-shape-20260929/` and sibling ZIP.
+
+Packaging completed: independent CPU PSNR/L1/foreground/background L1/IoU
+checks passed for all 492 predictions, along with all seven metric aggregates,
+24 GIF frame counts, 81 local HTML links, every packaged file hash and the
+executed fitting-script version hashes. Representative LHM/LHM++ comparison
+panels and the LHM++ fitting curves were visually inspected. ZIP CRC passed:
+1,834 files, 87,047,068 bytes, SHA256
+`5fcf5a2bd0749b4bff3f1d5bdde89d45bfce9fe44e9270c31678eae743fef7c1`.
+CPU allocation 2348482 completed with exit 0 and was released at 11:57:35 KST.
+
+### September 29 identity ASAP 50 / ACAP 10
+
+User requested the 50/10 coefficients and reuse of an idle 4090. Confirmed
+job 2343414/node31 had no GPU process (1 MiB used, 0% utilization). Its prior
+identity-v2 process had been killed after the last logged update 16,391; the
+allocation and tmux shell remained alive. Cause of termination is unconfirmed.
+
+Launched the [ASAP50/ACAP10 experiment](identity-asap50.md) at 15:03:14 KST in
+that same allocation and tmux pane, without submitting a new GPU request.
+Fresh seed-2026 reconstruction network; 20,000 updates requested. The executed
+identity-v2 source snapshot is reused and checked against its startup hashes.
+Only the training anisotropy coefficient changes (0.01 → 50); ACAP remains 10.
+Output is `runs/neuman-identity-asap50-acap10-20260929/`, with its own immutable
+source, configuration, logs and checkpoints. Configuration/source/GPU launch
+checks passed. Initial forward execution triggered a CUDA 12.8/SM89 gsplat
+extension rebuild on node31. No quality improvement is claimed at launch.
+
+These are the requested paper coefficients applied to our existing scale-ratio
+ASAP approximation. This does not implement the covariance-based ASAP formula
+printed in LHM Eq. 8. The exact upstream symbols/configuration differences and
+the retained project assumptions are documented in the experiment record.
+
+At 15:10:02 KST the new process (PID 1230741) had completed 35 consecutive
+updates, with finite loss terms and positive gradient norms. First-update
+losses match original v2 within 1e-6. Median post-compilation step time was
+2.616 s; peak allocated memory 9.69 GiB. The ASAP hinge was still zero in
+these early updates; validation is scheduled at update 250. The full 20,000
+update process remains running in the reused tmux/srun allocation. Receipt:
+`runs/neuman-identity-asap50-acap10-20260929/provenance/initial-training-health.json`.
+
+September 30, 02:17:57 KST: ASAP50 training reached 17,908/20,000 with all
+logged loss terms finite and ~2.196 s/update. Latest/best validation at 17,750:
+PSNR 22.187764, L1 0.01646588, LPIPS 0.05429450, foreground L1 0.08778576.
+On the same 44 validation frames at matched update 16,250, ASAP50 gives
+22.140511 / 0.01659444 / 0.05449133 versus original v2's
+22.213733 / 0.01644281 / 0.05391905. The increased weight has not improved
+validation quality so far. The penalty became active at update 148. Estimated
+remaining time ~78 minutes from recent wall-clock progress. New test-set
+evaluation is not reported. Details and saved-preview assessment are in
+[the experiment record](identity-asap50.md); numeric evidence is retained in
+the run's `provenance/status-20260930.json`.

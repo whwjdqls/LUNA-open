@@ -1,5 +1,8 @@
 # NeuMan data and geometry
 
+The paths and 2026-09-25 checks below refer to **PARCC**. See
+[Yonsei acquisition](yonsei.md) for the separate local download and validation.
+
 ## Acquisition
 
 Official source: [Apple NeuMan](https://github.com/apple-aiml-research/ml-neuman),
@@ -129,6 +132,20 @@ Match `create_split_files` in `data_io/neuman_helper.py`: lexically sort image
 filenames; calculate the upstream holdout stride and offset; the first half of
 held-out frames are test, the second half validation. Remaining frames train.
 This is approximately 80/10/10, not an independently randomized split.
+
+**Yonsei recheck, 2026-09-28:** CPU-only Slurm step 2336972.18 executed the
+pinned upstream `create_split_files` function with a metadata-only reader in
+the upstream's lexically sorted video order. All generated train/val/test
+filenames exactly matched the local manifest (344/44/41). The full upstream
+geometry reader was not executed, and generated split files were written to
+scratch outputs without changing the dataset. Receipt:
+`/scratch2/whwjdqls99/LUNA-open/outputs/gpu-2336972/identity-train-test-10000-audit.json`.
+
+The latest identity visualization uses fixed training references for both
+splits, unlike the random reference sampling used during training updates.
+All 344 train frames are shown; the 24 that are also fixed reference inputs
+are explicitly labeled and excluded from overview selections. See the
+[Yonsei gallery record](yonsei.md#latest-identity-train-and-test-visualizations).
 
 Four evaluation references are evenly spaced in the sorted training list.
 Training references are sampled without replacement and exclude the target.

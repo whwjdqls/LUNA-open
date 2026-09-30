@@ -11,6 +11,11 @@ from pathlib import Path
 import numpy as np
 from scipy import sparse
 
+try:
+    from numpy._core.multiarray import _reconstruct
+except ImportError:
+    from numpy.core.multiarray import _reconstruct
+
 
 class ChumpyLeaf:
     def __setstate__(self, state):
@@ -30,8 +35,8 @@ class LegacySMPLUnpickler(pickle.Unpickler):
             ("chumpy.ch", "Ch"): ChumpyLeaf,
             ("numpy", "ndarray"): np.ndarray,
             ("numpy", "dtype"): np.dtype,
-            ("numpy.core.multiarray", "_reconstruct"): np._core.multiarray._reconstruct,
-            ("numpy._core.multiarray", "_reconstruct"): np._core.multiarray._reconstruct,
+            ("numpy.core.multiarray", "_reconstruct"): _reconstruct,
+            ("numpy._core.multiarray", "_reconstruct"): _reconstruct,
             ("scipy.sparse.csc", "csc_matrix"): sparse.csc_matrix,
             ("scipy.sparse._csc", "csc_matrix"): sparse.csc_matrix,
             ("__builtin__", "set"): set,

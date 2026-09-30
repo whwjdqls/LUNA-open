@@ -10,7 +10,7 @@ import torch
 from torch import Tensor, nn
 
 from .avatar import CanonicalAvatar, PosedAvatar
-from .features import DinoFeatures, SapiensFeatures
+from .features import DinoFeatures, SapiensFaceFeatures, SapiensFeatures
 from .model import IdentityEncoder, ModelConfig, NeuralAnimator
 from .provenance import validate_inference_assets
 from .rendering import render
@@ -40,8 +40,8 @@ class LUNAPipeline(nn.Module):
         if state["stage"] != "animator":
             raise ValueError("Image-driven inference needs an animator-stage checkpoint")
         assets = Path(assets)
-        validate_inference_assets(state["feature_metadata"], assets)
         cfg = ModelConfig(**state["config"]["model"])
+        validate_inference_assets(state["feature_metadata"], assets, cfg.identity_face_encoder)
         identity = IdentityEncoder(
             state["identity"]["anchors"], state["identity"]["semantic_labels"], cfg
         )
@@ -53,11 +53,18 @@ class LUNAPipeline(nn.Module):
             state["animator"]["translation_std"],
         )
         animator.load_state_dict(state["animator"])
+        assets = Path(assets)
+        body_encoder = SapiensFeatures(assets / "sapiens_body/sapiens_1b_epoch_173_torchscript.pt2")
+        face_encoder = (
+            SapiensFaceFeatures(body_encoder)
+            if cfg.identity_face_encoder == "sapiens"
+            else DinoFeatures(assets / "dino_face", "face")
+        )
         pipeline = cls(
             identity,
             animator,
-            SapiensFeatures(assets / "sapiens_body/sapiens_1b_epoch_173_torchscript.pt2"),
-            DinoFeatures(assets / "dino_face", "face"),
+            body_encoder,
+            face_encoder,
             DinoFeatures(assets / "dino_motion", "motion"),
         )
         return pipeline.to(device).eval().requires_grad_(False)

@@ -105,8 +105,8 @@ def main():
         optimizer.step()
         losses.append(float(error.detach()))
     assert losses[-1] < 0.3 * losses[0], losses
-    # Test actual downloaded identity backbones on one real image. DINOv3 is
-    # deliberately absent here until approved access is available.
+    # Test actual downloaded identity backbones on four real reference images.
+    # DINOv3 and the real SMPL teacher are covered by caching and CLI integration.
     from cache_features import face_image
 
     encoder_data = NeuManDataset(args.data_root, args.manifest, size=1024)
@@ -173,8 +173,8 @@ def main():
         config=asdict(full_config),
         queries=full_n,
         motion_shape=list(full_motion.shape),
-        driving_features="synthetic; actual DINOv3 checkpoint unavailable",
-        anchors="synthetic; licensed SMPL asset unavailable",
+        driving_features="synthetic for this isolated network smoke",
+        anchors="synthetic for this isolated network smoke",
         rendering_resolution=[128, 128],
         trainable_parameters=sum(
             parameter.numel()

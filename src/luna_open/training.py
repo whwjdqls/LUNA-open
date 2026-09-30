@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import random
+import time
 from pathlib import Path
 
 import numpy as np
@@ -291,6 +292,8 @@ def main():
     }
     by_scene = {scene: indices for scene, indices in by_scene.items() if indices}
     for update in range(start, stop):
+        update_started = time.perf_counter()
+        torch.cuda.reset_peak_memory_stats()
         model.train()
         optimizer.zero_grad(set_to_none=True)
         metrics = {}
@@ -337,11 +340,13 @@ def main():
                 metrics[key] = (
                     metrics.get(key, 0.0) + float(value.detach()) / options["effective_batch"]
                 )
-        nn.utils.clip_grad_norm_(
+        gradient_norm = nn.utils.clip_grad_norm_(
             model.parameters(), options["gradient_clip"], error_if_nonfinite=True
         )
         optimizer.step()
         scheduler.step()
+        torch.cuda.synchronize()
+        training_seconds = time.perf_counter() - update_started
         completed = update + 1
         improved = False
         if completed % options["validate_every"] == 0 or completed == options["updates"]:
@@ -358,7 +363,14 @@ def main():
             score = result["mean_over_scenes"]["lpips"]
             improved, best = score < best, min(best, score)
             metrics["validation_lpips"] = score
-        record = dict(update=completed, lr=scheduler.get_last_lr()[0], **metrics)
+        record = dict(
+            update=completed,
+            lr=scheduler.get_last_lr()[0],
+            training_seconds=training_seconds,
+            gradient_norm_before_clip=float(gradient_norm),
+            peak_allocated_bytes=torch.cuda.max_memory_allocated(),
+            **metrics,
+        )
         with (output / "train.jsonl").open("a") as log:
             log.write(json.dumps(record) + "\n")
         if completed % 10 == 0 or completed == 1:

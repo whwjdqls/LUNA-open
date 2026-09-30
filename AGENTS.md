@@ -65,3 +65,28 @@ approved; Part 1 bulk download is blocked by Drive quotas, as documented in
 and label them as deviations. Document every
 material consideration and actual test result. Use Slurm allocations for heavy
 work; one-GPU smoke tests are authorized. Never report an unrun path as verified.
+
+## Server context
+
+This repository is shared between **PARCC** and **Yonsei**. Determine the active
+server from the actual checkout path and allocation; do not infer it from an
+experiment record. Store assets, datasets and results outside Git.
+
+- **PARCC:** checkout `/vast/home/j/jungbinc/LUNA-open`; storage
+  `/vast/projects/lingjie6/impossible/jungbinc`. Source `scripts/parcc_env.sh`.
+  CPU: account `lingjie6-impossible`, partition `genoa-std-mem`, QoS `genoa-std`.
+  GPU: `dgx-b200`, QoS `dgx`, one GPU. B200 extension architecture is `10.0`.
+- **Yonsei:** checkout `/home/whwjdqls99/LUNA-open`; storage
+  `/scratch2/whwjdqls99/LUNA-open`. Source `scripts/yonsei_env.sh`.
+  CPU: `dell_cpu`, QoS `cpu_qos`. Authorized one-4090 setup: `suma_rtx4090`,
+  QoS `base_qos`, `--gres=gpu:RTX4090:1`, using `srun` inside `tmux`.
+  Yonsei also has RTX 3090, A6000 and RTX PRO 6000 options. Inspect available
+  resources and confirm the allocation. Select extension architecture for the
+  actual device; RTX 4090 is `8.9`.
+- Use compute allocations for downloads, extraction, hashing, environment setup,
+  tests, features and training. Use login nodes for editing, light inspection
+  and Slurm submission/monitoring.
+- Keep server environments, CUDA builds, configuration and execution evidence
+  distinct. A successful run on one server is not verification on the other.
+  Preserve both server launchers and override paths through their environment
+  scripts/configuration. See `docs/yonsei.md` and `docs/experiments.md`.

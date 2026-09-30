@@ -1,4 +1,4 @@
-"""Prefetch LPIPS's public AlexNet backbone with curl, outside compute jobs."""
+"""Prefetch LPIPS's public AlexNet backbone with curl in a CPU allocation."""
 
 import argparse
 import json

@@ -16,6 +16,7 @@ packages = sorted(
     },
     key=str.lower,
 )
+args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text(
     "# Installed environment snapshot; source-built packages also require documented source pins.\n"
     "# Reinstall the project with pip install --no-deps -e .\n"

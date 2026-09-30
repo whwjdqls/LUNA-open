@@ -16,6 +16,43 @@ the paper's MHR. NeuMan is the first development dataset; MVHumanNet++ remains
 deferred. DNA-Rendering access is approved; its Part 1 inventory and source
 review are documented, but bulk downloads are blocked by Drive file quotas.
 
+**Yonsei baseline completed:** the original run finished 10k identity and 10k
+animator updates. Identity validation/test LPIPS is **0.057964 / 0.057738**.
+The animator's selected checkpoint is update 5k, validation/test LPIPS
+**0.282300 / 0.264168**, with a documented local-articulation failure. Training
+completion does not establish successful neural animation. Setup, all 429 real
+SMPL fits, 1,287 original feature tensors, CPU/GPU smoke and state-resume checks
+have local evidence; the separate strict pixel-continuation pilot failed its
+tolerance and remains recorded as such.
+See [Yonsei setup and evidence](docs/yonsei.md) and the [code review](docs/yonsei-code-review.md).
+
+**Fresh identity retraining (September 28):** a code/checkpoint diagnosis and
+separate 20k-update identity run are documented in the
+[problem list and retraining record](docs/identity-retraining.md). The new run
+uses job `2343414` on `node31`, one RTX 4090 in tmux
+`luna_identity_v2_20260928`. The presentation snapshot records **11,373/20,000**
+updates. Its selected update-10,250 checkpoint improves validation LPIPS to
+**0.054320**; a fresh comparison on the same 44 validation frames also reduces
+foreground RGB L1 from **0.101929 to 0.088814**. The new run is still identity-only;
+it does not repair the original animator.
+
+**Presentation package:** [report and download index](docs/presentation-package.md)
+links the extensive report, 29-slide starter PowerPoint, 48 GIFs, all copied
+qualitative outputs, charts, CSVs and supporting evidence in one ZIP.
+
+**Final baseline comparison:** [LHM / LHM++ / identity report](docs/lhmpp-neuman-evaluation.md)
+adds native LHM++-700M + DPT on all 41 official test frames, seven image metrics,
+18 GIFs and a 27-slide editable PowerPoint in one 55 MB download. Our identity
+checkpoint remains fixed at update 14,750; released baselines have no local
+fine-tuning, while ours was trained on these six identities.
+
+**Alignment investigation:** [canonical display correction and metric diagnostics](docs/alignment-investigation.md)
+records the SMPL/SMPL-X origin mismatch and recalculated pose, image alignment,
+shape, input crop and canvas results. Test-RGB pose fits are explicitly separated
+from the unchanged fixed-protocol benchmark.
+
+The historical verified results below are from **PARCC/B200**.
+
 - NeuMan archive verified and extracted; all 429 frames passed adapter checks.
 - [DNA-Rendering Part 1 audit](docs/dna-rendering.md): 164 listed files,
   246.646 GB including A-poses and depth; the README, A-pose mapping and sample
@@ -94,6 +131,13 @@ Full evidence, issues, and remaining work: [experiment log](docs/experiments.md)
 
 ## Environment and storage
 
+The repository supports **PARCC** and **Yonsei**. On PARCC, source
+`scripts/parcc_env.sh` and use `configs/neuman.yaml`. On Yonsei, source
+`scripts/yonsei_env.sh` and use `configs/neuman_yonsei.yaml`; see the
+[Yonsei setup and acquisition record](docs/yonsei.md). Server paths, Slurm
+resources and CUDA extension builds remain separate. The commands below are
+for PARCC/B200; Yonsei execution evidence is recorded separately above.
+
 Source code is in this repository. Data, environments, caches, assets, and outputs
 are under `/vast/projects/lingjie6/impossible/jungbinc` (shared 500 GB quota).
 The existing environment is Python 3.11 with PyTorch 2.8.0+cu128. Runtime versions
@@ -106,12 +150,13 @@ source scripts/parcc_env.sh
 # python -m pip install -r requirements-resolved.txt
 # python -m pip install --no-deps -e .
 
-# Prepare/verify LPIPS's backbone on the login node before any compute job.
+# Prepare/verify LPIPS's backbone inside a Slurm allocation.
 "$LUNA_PYTHON" scripts/download_lpips.py
 ```
 
-Use Slurm for computation/compilation; use the login node for editing, transfers,
-and environment management. No global shell configuration was changed.
+Use Slurm for downloads, extraction, hashing, environment setup, compilation,
+tests, and training. Use the login node for editing, light inspection, and job
+orchestration. No global shell configuration was changed.
 
 ## Data and checks
 
@@ -185,12 +230,15 @@ Use `--resume <latest.pt>` with the same configuration to continue a training
 stage. The trainer checks configuration, all 1,311 fingerprinted data inputs,
 the SMPL asset hash, and feature metadata. Identity-to-animator transfer also
 checks the sampling seed so Gaussian IDs continue to match teacher points.
-The default development schedule is 10k updates per stage; no long training run
-has been launched. DDP, synchronized multiview refinement, sketches/skeletons,
+The default development schedule is 10k updates per stage; current Yonsei run
+status is recorded above and in `docs/yonsei.md`. DDP, synchronized multiview refinement, sketches/skeletons,
 and hybrid-label ablations remain future work.
 
 ## Start here
 
+- [Yonsei identity train/test gallery](docs/yonsei.md#latest-identity-train-and-test-visualizations):
+  latest identity checkpoint, all 344 train and 41 test frames, canonical views
+  and local gallery paths.
 - [Repository instructions](AGENTS.md): source priority and implementation rules.
 - [Reference notes](docs/references.md): initial method comparison, code entry
   points, and questions to resolve before implementation.

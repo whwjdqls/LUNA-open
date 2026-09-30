@@ -30,16 +30,22 @@ class ModelConfig:
     motion_dim: int = 1024
     num_parts: int = 24
     initial_scale: float = 0.008
+    # Defaults preserve the original checkpoints. These are explicit development
+    # choices, not recovered LUNA hyperparameters; see identity-retraining.md.
+    identity_qk_norm: bool = False
+    identity_face_encoder: str = "dinov2"
+    identity_fp32_decoder: bool = False
 
 
 class JointAttention(nn.Module):
     """Two streams with distinct projections and joint self/cross attention."""
 
-    def __init__(self, width: int, heads: int):
+    def __init__(self, width: int, heads: int, qk_norm: bool = False):
         super().__init__()
         if width % heads:
             raise ValueError("Width must be divisible by attention heads")
         self.heads = heads
+        self.qk_norm = qk_norm
         self.norms = nn.ModuleList([nn.LayerNorm(width) for _ in range(4)])
         self.qkv = nn.ModuleList([nn.Linear(width, 3 * width) for _ in range(2)])
         self.out = nn.ModuleList([nn.Linear(width, width) for _ in range(2)])
@@ -58,6 +64,13 @@ class JointAttention(nn.Module):
             qkv = self.qkv[i](self.norms[i](stream)).reshape(b, n, 3, self.heads, c // self.heads)
             projections.append(qkv.permute(2, 0, 3, 1, 4))
         q, k, v = torch.cat(projections, dim=3).unbind(0)
+        if self.qk_norm:
+            # Per-head RMS normalization without learned gain prevents attention
+            # temperature from growing through projection-weight magnitudes.
+            # LHM uses RMS Q/K normalization; non-affine normalization here is
+            # an independent stability choice motivated by checkpoint diagnostics.
+            q = F.rms_norm(q, (q.shape[-1],), eps=1e-6)
+            k = F.rms_norm(k, (k.shape[-1],), eps=1e-6)
         attention = F.scaled_dot_product_attention(q, k, v)
         attention = attention.transpose(1, 2).flatten(2)
         parts = attention.split((query.shape[1], context.shape[1]), dim=1)
@@ -87,13 +100,21 @@ class IdentityEncoder(nn.Module):
         self.parts = nn.Embedding(config.num_parts, config.width)
         self.body_projection = nn.Linear(config.body_dim, config.width)
         self.face_projection = nn.Linear(config.face_dim, config.width)
-        self.face_layers = nn.ModuleList(
-            [nn.Linear(config.face_dim, config.face_dim) for _ in range(4)]
-        )
-        self.face_fusion = nn.Linear(4 * config.face_dim, config.face_dim)
+        if config.identity_face_encoder not in {"dinov2", "sapiens"}:
+            raise ValueError(f"Unsupported identity face encoder: {config.identity_face_encoder}")
+        self.face_encoder = config.identity_face_encoder
+        if self.face_encoder == "dinov2":
+            self.face_layers = nn.ModuleList(
+                [nn.Linear(config.face_dim, config.face_dim) for _ in range(4)]
+            )
+            self.face_fusion = nn.Linear(4 * config.face_dim, config.face_dim)
+        self.fp32_decoder = config.identity_fp32_decoder
         self.type_embedding = nn.Parameter(torch.randn(2, config.width) * 0.02)
         self.blocks = nn.ModuleList(
-            [JointAttention(config.width, config.heads) for _ in range(config.depth)]
+            [
+                JointAttention(config.width, config.heads, config.identity_qk_norm)
+                for _ in range(config.depth)
+            ]
         )
         self.norm = nn.LayerNorm(config.width)
         self.decoder = mlp(config.width, config.decoder_width, 14)
@@ -106,6 +127,8 @@ class IdentityEncoder(nn.Module):
         # spatial encoding comes from pretrained backbones. No input pose required.
         b = body_tokens.shape[0]
         if face_tokens.ndim == 5:
+            if self.face_encoder != "dinov2":
+                raise ValueError("Sapiens face features must be [B,views,patches,channels]")
             # Frozen DINO features from four depths; learned per-depth 1x1
             # projections and concatenation fusion, as motivated by LHM.
             layers = [layer(face_tokens[:, :, i]) for i, layer in enumerate(self.face_layers)]
@@ -117,7 +140,11 @@ class IdentityEncoder(nn.Module):
         for block in self.blocks:
             query, context = block(query, context)
         query = self.norm(query)
-        raw = self.decoder(query).float()
+        if self.fp32_decoder:
+            with torch.autocast(device_type=query.device.type, enabled=False):
+                raw = self.decoder(query.float())
+        else:
+            raw = self.decoder(query).float()
         offset, q, scale, alpha, color = raw.split((3, 4, 3, 1, 3), dim=-1)
         identity_q = raw.new_tensor([1, 0, 0, 0])
         gaussians = Gaussians(

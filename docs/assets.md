@@ -3,6 +3,10 @@
 No body model or upstream checkpoint is committed to this repository. Source
 licenses do not automatically cover model weights, templates, or datasets.
 
+The acquisition and execution results below were recorded on **PARCC**.
+[Yonsei acquisition](yonsei.md) records the current server's paths, receipts,
+and checks separately; PARCC readiness does not imply Yonsei readiness.
+
 | Asset | Use | Acquisition / status |
 | --- | --- | --- |
 | Neutral SMPL | Our template and teacher | User supplied on 2026-09-25; legacy arrays converted, configured and checked against all 429 NeuMan fits. |

@@ -37,6 +37,27 @@ class SapiensFeatures(nn.Module):
         return features.flatten(2).transpose(1, 2).contiguous()
 
 
+class SapiensFaceFeatures(nn.Module):
+    """Sapiens on face crops, pooling its 64x64 map to 32x32 tokens.
+
+    The crop and pooling interface is a project assumption. The encoder may be
+    shared with the body branch; no extra backbone weights are trained.
+    """
+
+    def __init__(self, encoder: SapiensFeatures):
+        super().__init__()
+        self.encoder = encoder
+
+    @torch.no_grad()
+    def forward(self, image: Tensor) -> Tensor:
+        features = self.encoder(image)
+        b, n, c = features.shape
+        if n != 4096:
+            raise ValueError(f"Expected Sapiens 64x64 patches, got {n}")
+        spatial = features.transpose(1, 2).reshape(b, c, 64, 64)
+        return F.avg_pool2d(spatial, 2).flatten(2).transpose(1, 2).contiguous()
+
+
 class DinoFeatures(nn.Module):
     def __init__(self, directory: str | Path, kind: str):
         super().__init__()

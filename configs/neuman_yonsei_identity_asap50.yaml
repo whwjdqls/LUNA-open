@@ -1,0 +1,41 @@
+# Weight ablation of identity v2: existing scale-ratio ASAP approximation at 50,
+# ACAP at 10. These coefficients follow LHM Eq. 10; the ASAP formula differs.
+# See docs/identity-asap50.md. Fresh seed-matched run; no checkpoint warm start.
+seed: 2026
+data_root: /scratch2/whwjdqls99/LUNA-open/data/neuman/dataset
+manifest: /scratch2/whwjdqls99/LUNA-open/data/neuman/manifest-v2.json
+features: /scratch2/whwjdqls99/LUNA-open/features/neuman-sapiens-v3
+smpl_model: /scratch2/whwjdqls99/LUNA-open/assets/smpl/SMPL_NEUTRAL.pkl
+smpl_pose_blend_shapes: false
+output: /scratch2/whwjdqls99/LUNA-open/runs/neuman-identity-asap50-acap10-20260929
+num_queries: 8192
+image_size: 512
+model:
+  width: 1024
+  depth: 5
+  heads: 16
+  decoder_width: 512
+  body_dim: 1536
+  face_dim: 1536
+  motion_dim: 1024
+  num_parts: 24
+  initial_scale: 0.008
+  identity_qk_norm: true
+  identity_face_encoder: sapiens
+  identity_fp32_decoder: true
+identity_loss:
+  rgb_reduction: balanced_foreground_background
+  anisotropy_weight: 50.0
+  anchor_weight: 10.0
+training:
+  updates: 20000
+  effective_batch: 16
+  targets_per_identity: 4
+  learning_rate: 0.0002
+  lr_warmup: 250
+  final_lr_fraction: 0.05
+  weight_decay: 0.0005
+  gradient_clip: 1.0
+  validate_every: 250
+  checkpoint_every: 100
+  lpips_backbone: alex

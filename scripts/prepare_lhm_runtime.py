@@ -6,6 +6,9 @@ native source checkouts are preserved. This does not execute the LHM model.
 
 import argparse
 import json
+import os
+import shutil
+import socket
 from pathlib import Path, PurePosixPath
 
 from luna_open.provenance import file_sha256
@@ -15,12 +18,7 @@ DINO_SHA256 = "36e4deffbaef061a2576705b0c36f93621e2ae20bf6274694821b0b492551b51"
 SAPIENS_REVISION = "565756fa30d04c440e5ff15066afc2ea0e647d3d"
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--assets", type=Path, required=True)
-    parser.add_argument("--torch-home", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
+def prepare_verified(args):
     if args.output.exists():
         raise FileExistsError("Preserve existing runtime layouts; choose a new directory")
     prior_root = args.assets / "lhm_prior_official"
@@ -93,6 +91,60 @@ def main():
     )
     (args.output / "runtime.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(dict(output=str(args.output.resolve()), linked_files=len(files)), indent=2))
+
+
+def prepare_source(work, runtime):
+    """Retain Yonsei's native source-copy layout and its idempotent links."""
+    if not os.environ.get("SLURM_JOB_ID") or "login" in socket.gethostname():
+        raise RuntimeError("Slurm compute node required")
+    prior = work / "assets/lhm-priors"
+    sapiens = prior / (
+        "pretrained_models/sapiens/pretrained/checkpoints/sapiens_1b/"
+        "sapiens_1b_epoch_173_torchscript.pt2"
+    )
+    links = {
+        runtime / "pretrained_models": prior / "pretrained_models",
+        runtime / "gfpgan": prior / "gfpgan",
+        sapiens: work / "assets/sapiens_body/sapiens_1b_epoch_173_torchscript.pt2",
+    }
+    for source in links.values():
+        if not source.exists():
+            raise FileNotFoundError(source)
+    if not runtime.exists():
+        shutil.copytree(work / "references/LHM", runtime)
+    for destination, source in links.items():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() or destination.is_symlink():
+            if destination.resolve() != source.resolve():
+                raise ValueError(f"Existing path has another target: {destination}")
+        else:
+            destination.symlink_to(source, target_is_directory=source.is_dir())
+    (runtime.parent / "asset-links.json").write_text(
+        json.dumps({str(key): str(value) for key, value in links.items()}, indent=2) + "\n"
+    )
+    print(f"Prepared {runtime}", flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--assets", type=Path)
+    parser.add_argument("--torch-home", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--work",
+        type=Path,
+        default=Path(os.environ.get("LUNA_WORK", "/scratch2/whwjdqls99/LUNA-open")),
+        help="Source-copy mode storage root; defaults to LUNA_WORK or Yonsei storage",
+    )
+    parser.add_argument("--runtime", type=Path, help="Override native source-copy directory")
+    args = parser.parse_args()
+    supplied = (args.assets, args.torch_home, args.output)
+    if any(supplied):
+        if not all(supplied) or args.runtime is not None:
+            parser.error("Verified layout requires --assets, --torch-home, --output together")
+        prepare_verified(args)
+    else:
+        prepare_source(args.work, args.runtime or args.work / "baselines/lhm-20260928/source")
 
 
 if __name__ == "__main__":

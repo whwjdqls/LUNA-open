@@ -43,13 +43,21 @@ def validate_identity_transfer(checkpoint: dict, config: dict, feature_metadata:
             raise ValueError(f"Identity checkpoint feature metadata differs: {kind}")
 
 
-def validate_inference_assets(feature_metadata: dict, assets: Path) -> None:
+def validate_inference_assets(
+    feature_metadata: dict, assets: Path, face_backbone: str | None = None
+) -> None:
     """Require the encoder revisions used to create a checkpoint's training inputs.
 
     Download receipts identify revisions; they do not prove arbitrary local file
     edits have not occurred. Content audits remain separate acquisition evidence.
     """
-    for kind, key in (("body", "sapiens_body"), ("face", "dino_face"), ("motion", "dino_motion")):
+    cached_face = feature_metadata["face"].get("face_backbone", "dinov2")
+    if cached_face not in {"dinov2", "sapiens"} or (
+        face_backbone is not None and face_backbone != cached_face
+    ):
+        raise ValueError("Inference face encoder differs from training inputs")
+    face_key = "sapiens_body" if cached_face == "sapiens" else "dino_face"
+    for kind, key in (("body", "sapiens_body"), ("face", face_key), ("motion", "dino_motion")):
         expected = feature_metadata[kind]["asset"]
         receipt = json.loads((assets / f"{key}-receipt.json").read_text())
         if receipt.get("status") != "downloaded" or any(

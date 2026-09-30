@@ -360,11 +360,20 @@ class DNADataset(Dataset):
             )
         return fields
 
-    def face_image(self, scene, name):
+    def face_image(self, scene, name, size=None):
         image = self.load_frame(scene, name)["rgb"]
         side = max(1, int(self.size * 0.35))
         left = (self.size - side) // 2
-        return image[:, :side, left : left + side], PREPROCESSING["face_crop"]
+        crop = image[:, :side, left : left + side]
+        if size is not None:
+            crop = torch.nn.functional.interpolate(
+                crop[None],
+                size=(size, size),
+                mode="bicubic",
+                align_corners=False,
+                antialias=True,
+            )[0].clamp(0, 1)
+        return crop, PREPROCESSING["face_crop"]
 
     def __getitem__(self, index):
         scene, name = self.items[index]

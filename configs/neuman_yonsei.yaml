@@ -1,0 +1,31 @@
+# Yonsei storage; same development settings as neuman.yaml (PARCC).
+# Feature caches and a dedicated training environment must be prepared locally.
+seed: 2026
+data_root: /scratch2/whwjdqls99/LUNA-open/data/neuman/dataset
+manifest: /scratch2/whwjdqls99/LUNA-open/data/neuman/manifest-v2.json
+features: /scratch2/whwjdqls99/LUNA-open/features/neuman-v2
+smpl_model: /scratch2/whwjdqls99/LUNA-open/assets/smpl/SMPL_NEUTRAL.pkl
+smpl_pose_blend_shapes: false
+output: /scratch2/whwjdqls99/LUNA-open/runs/neuman
+num_queries: 8192
+image_size: 512
+model:
+  width: 1024
+  depth: 5
+  heads: 16
+  decoder_width: 512
+  body_dim: 1536
+  face_dim: 1024
+  motion_dim: 1024
+  num_parts: 24
+  initial_scale: 0.008
+training:
+  updates: 10000
+  effective_batch: 16
+  learning_rate: 0.0004
+  weight_decay: 0.0005
+  gradient_clip: 0.1
+  global_warmup: 1000
+  validate_every: 500
+  checkpoint_every: 500
+  lpips_backbone: alex

@@ -63,3 +63,26 @@ def test_inference_rejects_encoder_revision_changes(tmp_path):
     path.write_text(json.dumps(changed))
     with pytest.raises(ValueError, match="motion"):
         validate_inference_assets(metadata, tmp_path)
+
+
+def test_inference_selects_sapiens_face_receipt_and_rejects_model_mismatch(tmp_path):
+    metadata = {}
+    for kind, key in (
+        ("body", "sapiens_body"),
+        ("face", "sapiens_body"),
+        ("motion", "dino_motion"),
+    ):
+        asset = dict(repo=f"test/{key}", revision="expected", files=["weights.bin"])
+        metadata[kind] = dict(asset=asset)
+        (tmp_path / key).mkdir(exist_ok=True)
+        (tmp_path / key / "weights.bin").write_bytes(b"fixture")
+        (tmp_path / f"{key}-receipt.json").write_text(
+            json.dumps(dict(status="downloaded", **asset))
+        )
+    metadata["face"]["face_backbone"] = "sapiens"
+    validate_inference_assets(metadata, tmp_path, "sapiens")
+    with pytest.raises(ValueError, match="face encoder"):
+        validate_inference_assets(metadata, tmp_path, "dinov2")
+    metadata["face"]["asset"]["revision"] = "wrong"
+    with pytest.raises(ValueError, match="face"):
+        validate_inference_assets(metadata, tmp_path, "sapiens")

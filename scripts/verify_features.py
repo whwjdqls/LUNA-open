@@ -35,12 +35,17 @@ def main():
     for kind in args.kinds:
         folder = args.features / kind
         metadata = json.loads((folder / "metadata.json").read_text())
+        sapiens_face = kind == "face" and metadata.get("face_backbone") == "sapiens"
+        asset_key = "sapiens_body" if sapiens_face else asset_keys[kind]
+        shape = (1024, 1536) if sapiens_face else shapes[kind]
+        preprocessing_version = (
+            2 if sapiens_face or manifest.get("dataset") == "dna_rendering" else 1
+        )
         if (
             metadata["manifest_sha256"] != digest
             or metadata["kind"] != kind
-            or metadata["asset"] != catalog[asset_keys[kind]]
-            or metadata["preprocessing_version"]
-            != (2 if manifest.get("dataset") == "dna_rendering" else 1)
+            or metadata["asset"] != catalog[asset_key]
+            or metadata["preprocessing_version"] != preprocessing_version
             or metadata["dtype"] != "float16"
         ):
             raise ValueError(f"Cache metadata does not match the current protocol: {kind}")
@@ -52,7 +57,7 @@ def main():
             path = folder / relative
             saved = torch.load(path, weights_only=True, map_location="cpu")
             features = saved["features"]
-            if features.shape != shapes[kind] or features.dtype != torch.float16:
+            if features.shape != shape or features.dtype != torch.float16:
                 raise ValueError(f"Wrong feature shape/dtype: {kind}/{relative}")
             if not torch.isfinite(features).all() or features.float().std() == 0:
                 raise ValueError(f"Nonfinite or constant features: {kind}/{relative}")
@@ -61,7 +66,7 @@ def main():
             total_bytes += path.stat().st_size
         results[kind] = dict(
             frames=len(expected_paths),
-            shape=list(shapes[kind]),
+            shape=list(shape),
             storage_dtype="float16",
             total_bytes=total_bytes,
             crop_sources=dict(crop_sources),

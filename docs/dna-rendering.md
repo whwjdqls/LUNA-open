@@ -556,3 +556,11 @@ to remove the per-file download limit.
 The Python downloader above currently uses anonymous HTTP; authenticating
 rclone does not automatically authenticate that script. Bulk transfer and
 receipt integration have not yet been verified.
+
+### September 30 authenticated recheck
+
+Job **8772142**, private OAuth client, fresh authenticated listing and serial
+individual-file attempts: **3/164 complete, 161 file-quota failures**, exit 1,
+3 min 48 s. Existing SHA256/MD5 and ZIP CRC verification passed. No new raw SMC
+was transferred; the download process is terminal. This recheck establishes
+that the download quotas still apply today, despite working authentication.

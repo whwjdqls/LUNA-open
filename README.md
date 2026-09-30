@@ -16,6 +16,13 @@ the paper's MHR. NeuMan is the first development dataset; MVHumanNet++ remains
 deferred. DNA-Rendering access is approved; its Part 1 inventory and source
 review are documented, but bulk downloads are blocked by Drive file quotas.
 
+**Shared training setup:** [controlled LHM / LHM++ / LUNA retraining](docs/controlled-comparison.md)
+provides one sampling, optimizer, loss and evaluation contract plus separate
+Yonsei/PARCC launch configurations. All 77 CPU tests passed on PARCC. Native
+forward/backward gates are queued; complete body-label conversion and common
+GPU execution remain pending. The shared-loss LUNA run is explicitly a
+supervision ablation; the existing paper-directed trainer is preserved.
+
 **Yonsei baseline completed:** the original run finished 10k identity and 10k
 animator updates. Identity validation/test LPIPS is **0.057964 / 0.057738**.
 The animator's selected checkpoint is update 5k, validation/test LPIPS

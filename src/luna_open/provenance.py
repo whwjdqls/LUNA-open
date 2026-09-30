@@ -7,7 +7,14 @@ from pathlib import Path
 
 def file_sha256(path: str | Path) -> str:
     with Path(path).open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
+        if hasattr(hashlib, "file_digest"):
+            return hashlib.file_digest(source, "sha256").hexdigest()
+        # Released Yonsei baseline environments use Python 3.10. Keep the
+        # fingerprint identical to Python 3.11 without changing those environments.
+        digest = hashlib.sha256()
+        for block in iter(lambda: source.read(8 * 1024**2), b""):
+            digest.update(block)
+        return digest.hexdigest()
 
 
 def verify_sources(root: Path, manifest: dict) -> None:

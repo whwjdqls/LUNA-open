@@ -30,6 +30,16 @@ def test_reject_unfingerprinted_training_manifest(tmp_path):
         verify_sources(tmp_path, {"schema_version": 1})
 
 
+def test_fingerprints_agree_with_python310_baseline_fallback(tmp_path, monkeypatch):
+    import hashlib
+
+    path = tmp_path / "fixture.bin"
+    path.write_bytes(b"same bytes on both servers" * 100)
+    expected = file_sha256(path)
+    monkeypatch.delattr(hashlib, "file_digest")
+    assert file_sha256(path) == expected
+
+
 def test_identity_transfer_preserves_point_correspondence_and_inputs():
     config = dict(seed=2026, num_queries=8192, model={"width": 1024}, image_size=512)
     metadata = dict(body={"revision": "body-v1"}, face={"revision": "face-v1"})

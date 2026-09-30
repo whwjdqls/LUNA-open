@@ -1,0 +1,22 @@
+training_source: ${LUNA_WORK}/references/LHM-plusplus
+datasets:
+  neuman:
+    root: ${LUNA_WORK}/data/neuman/dataset
+    manifest: ${LUNA_WORK}/data/neuman/manifest-v2.json
+    features: ${LUNA_WORK}/features/neuman-v2
+    # The published evaluation conversions cover references/held-out frames.
+    # Retraining needs accepted conversions for every selected training frame too.
+    native_motion: null
+    native_coordinate_frame: body
+    weight: 1.0
+models:
+  lhm:
+    source: ${LUNA_WORK}/baselines/lhm-20260928/source
+    runtime: ${LUNA_WORK}/baselines/lhm-20260928/source
+    architecture: ${LUNA_WORK}/assets/lhm_500m/config.json
+  lhmpp:
+    source: ${LUNA_WORK}/baselines/lhmpp-20260928/source
+    runtime: ${LUNA_WORK}/baselines/lhmpp-20260928/source
+    architecture: ${LUNA_WORK}/assets/lhmpp_700m/config.json
+  luna:
+    config: configs/neuman_yonsei.yaml

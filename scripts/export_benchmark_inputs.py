@@ -20,12 +20,14 @@ def main():
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--split", choices=["val", "test"], default="test")
+    parser.add_argument("--split", choices=["train", "val", "test", "all"], default="test")
     args = parser.parse_args()
     if (args.output / "protocol.json").exists():
         raise FileExistsError("Protocol already exported; choose a new directory to change it")
     verify_sources(args.root, json.loads(args.manifest.read_text()))
-    data = NeuManDataset(args.root, args.manifest, split=args.split, size=512)
+    data = NeuManDataset(
+        args.root, args.manifest, split="train" if args.split == "all" else args.split, size=512
+    )
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = dict(
         manifest_sha256=hashlib.sha256(args.manifest.read_bytes()).hexdigest(),
@@ -35,7 +37,11 @@ def main():
         scenes={},
     )
     for scene, info in data.metadata.items():
-        target_names = info["splits"][args.split]
+        target_names = (
+            sorted(set().union(*map(set, info["splits"].values())))
+            if args.split == "all"
+            else info["splits"][args.split]
+        )
         names = sorted(set(target_names + info["references"]))
         (args.output / scene / "rgb").mkdir(parents=True, exist_ok=True)
         (args.output / scene / "mask").mkdir(parents=True, exist_ok=True)
@@ -65,7 +71,8 @@ def main():
     if destination.exists() and destination.read_text() != content:
         raise ValueError("Existing exported protocol differs; select a new directory")
     destination.write_text(content)
-    print(f"Exported {len(data)} targets, with four fixed references per scene, to {args.output}")
+    count = sum(len(info["targets"]) for info in manifest["scenes"].values())
+    print(f"Exported {count} targets, with four fixed references per scene, to {args.output}")
 
 
 if __name__ == "__main__":

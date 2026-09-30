@@ -26,7 +26,12 @@ from scipy import sparse
 
 def sha256(path):
     with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        if hasattr(hashlib, "file_digest"):
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+        digest = hashlib.sha256()
+        for block in iter(lambda: stream.read(8 * 1024**2), b""):
+            digest.update(block)
+        return digest.hexdigest()
 
 
 def load_transfer(path):

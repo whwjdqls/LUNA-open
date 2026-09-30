@@ -2523,3 +2523,29 @@ constructed/loaded LHM and checked CUDA KNN/attention, then failed LHM++ state
 validation. The imported Yonsei adapter explains the missing dormant DPT-only
 constructor blocks; that fix still needs a PARCC run. Neither operator smoke
 proves complete reconstruction/training execution.
+
+## 2026-09-30 — shared retraining setup
+
+Added a controlled mixed-corpus training contract and deterministic sampler for
+LHM, LHM++ and LUNA, with server-specific path/environment templates. The native
+adapters call the actual pinned architectures with gradients. Released LHM++
+training photometric code is executed for all three methods; missing LHM
+orchestration is implemented locally. The shared-loss LUNA experiment is a
+documented supervision ablation, preserving the existing paper-directed trainer.
+See [the protocol and source audit](controlled-comparison.md).
+
+CPU job **8772205** passed the initial four focused comparison tests in 4.73 s.
+Job **8772226** passed all **77 non-GPU tests in 42.85 s**. Its real NeuMan
+preflight correctly rejected missing full-corpus native body-motion receipts.
+These checks do not establish full training readiness. Native one-update GPU
+integration job **8772184** remains queued; its synthetic motion/camera are
+explicitly unsuitable for baseline scoring. Common end-to-end training, resume
+and evaluation require an admitted corpus and remain unverified.
+
+Final focused CPU job **8772243** passed **12 tests in 4.33 s**, including
+body-receipt admission and comparison mismatch rejection; the common CLI imports
+in the PARCC native baseline environment. Full NeuMan export job **8772247**
+completed successfully in **46 s**, exporting all **429 selected targets** for
+future annotation-only body conversion. The required licensed correspondence
+files remain absent on PARCC; no conversion pass is claimed. Slurm's native
+start estimate for 8772184 is 09:56 **EDT**, not UTC, and remains an estimate.

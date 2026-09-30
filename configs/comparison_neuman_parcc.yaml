@@ -1,0 +1,22 @@
+# Server locations and admitted data; the shared hyperparameters are in comparison.yaml.
+# native_motion remains null until all training/validation/test fits pass conversion.
+training_source: ${LUNA_WORK}/references/LHM-plusplus
+datasets:
+  neuman:
+    root: ${LUNA_WORK}/data/neuman/dataset
+    manifest: ${LUNA_WORK}/data/neuman/manifest-v2.json
+    features: ${LUNA_WORK}/features/neuman-v2
+    native_motion: null
+    native_coordinate_frame: body
+    weight: 1.0
+models:
+  lhm:
+    source: ${LUNA_WORK}/references/LHM
+    runtime: ${LUNA_WORK}/baselines/lhm-runtime-v1
+    architecture: ${LUNA_WORK}/assets/lhm_500m/config.json
+  lhmpp:
+    source: ${LUNA_WORK}/references/LHM-plusplus
+    runtime: ${LUNA_WORK}/baselines/lhmpp-runtime-v1
+    architecture: ${LUNA_WORK}/assets/lhmpp_700m/config.json
+  luna:
+    config: configs/neuman.yaml

@@ -1,5 +1,11 @@
 # Baselines and inference integration
 
+For the requested retraining on a common future curated corpus, use the
+[controlled comparison protocol](controlled-comparison.md). It calls the pinned
+native LHM/LHM++ models with gradients and reuses released LHM++ loss code.
+The released-checkpoint evaluations below have different training histories
+and remain separately documented diagnostics.
+
 **Canonical display correction:** the original shared-camera panels mixed SMPL
 and SMPL-X pelvis origins. See the [alignment investigation](alignment-investigation.md)
 for corrected views, recalculated alignment/pose/canvas metrics and Table 1 scope.

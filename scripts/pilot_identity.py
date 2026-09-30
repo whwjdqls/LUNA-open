@@ -43,13 +43,14 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=40)
+    parser.add_argument("--inspect-every", type=int, default=100)
     parser.add_argument("--scene", default="bike")
     parser.add_argument("--frame", default="00001.png")
     args = parser.parse_args()
-    if args.steps < 2 or not torch.cuda.is_available():
-        raise ValueError("Use at least two steps inside a GPU allocation")
-    if (args.output / "report.json").exists():
-        raise FileExistsError("Use a new pilot output directory")
+    if args.steps < 2 or args.inspect_every < 1 or not torch.cuda.is_available():
+        raise ValueError("Use at least two steps and a positive inspection interval on a GPU")
+    if args.output.exists() and any(args.output.iterdir()):
+        raise FileExistsError("Use a new or empty pilot output directory")
     args.output.mkdir(parents=True, exist_ok=True)
     cfg = yaml.safe_load(args.config.read_text())
     seed_all(cfg["seed"])
@@ -133,6 +134,13 @@ def main():
         save_image(prediction["rgb"][0], args.output / f"{label}-rgb.png")
         save_image(prediction["alpha"][0].expand(3, -1, -1), args.output / f"{label}-alpha.png")
         scores = image_metrics(prediction, target["rgb"], target["mask"], perceptual)
+        # Diagnostic only: isolate target-foreground color error so the white
+        # background cannot dominate PSNR. Do not mask the prediction itself.
+        foreground = target["mask"] >= 0.5
+        foreground_mse = (
+            (prediction["rgb"].clamp(0, 1) - target["rgb"]).square() * foreground
+        ).sum() / (3 * foreground.sum()).clamp_min(1)
+        scores["foreground_psnr"] = -10 * torch.log10(foreground_mse.clamp_min(1e-10))[None]
         return dict(
             total=float(sum(losses.values())),
             losses={k: float(v) for k, v in losses.items()},
@@ -141,15 +149,21 @@ def main():
 
     save_image(target["rgb"][0], args.output / "target.png")
     initial = inspect(identity, "initial")
-    history = []
+    inspections = [dict(update=0, **initial)]
+    inspection_path = args.output / "inspections.json"
+    inspection_path.write_text(json.dumps(inspections, indent=2) + "\n")
     for update in range(args.steps):
         record = dict(update=update + 1, **step(identity, optimizer))
-        history.append(record)
         with (args.output / "train.jsonl").open("a") as stream:
             stream.write(json.dumps(record) + "\n")
         if update == 0 or (update + 1) % 10 == 0:
             print(json.dumps(record), flush=True)
+        if (update + 1) % args.inspect_every == 0 and update + 1 < args.steps:
+            inspections.append(dict(update=update + 1, **inspect(identity, f"step-{update + 1}")))
+            inspection_path.write_text(json.dumps(inspections, indent=2) + "\n")
     final = inspect(identity, "final")
+    inspections.append(dict(update=args.steps, **final))
+    inspection_path.write_text(json.dumps(inspections, indent=2) + "\n")
     training_peak = torch.cuda.max_memory_allocated()
     # Preserve completed training evidence even if a later continuation check fails.
     (args.output / "training-report.json").write_text(
@@ -231,6 +245,8 @@ def main():
             "Effective batch 1, fixed references and target, constant learning rate",
             "Not the full training sampler/schedule or a reusable identity checkpoint",
             "Memory includes a second model/optimizer for the continuation check",
+            "Foreground PSNR uses target-mask >=0.5 pixels only; predictions are not masked",
+            "Objective reduction alone does not establish useful overfit avatar quality",
         ],
     )
     (args.output / "report.json").write_text(json.dumps(result, indent=2) + "\n")

@@ -7,7 +7,12 @@ Started 2026-09-25. This is a living record of decisions and verified work.
 - Independent LUNA v2 implementation; LUNA remains the method authority.
 - **User-selected SMPL replaces the paper's MHR** for canonical anchors and the
   training teacher. No MHR dependency or SMPL-to-MHR conversion is planned.
-- NeuMan is available first; MVHumanNet++ and DNA-Rendering are deferred.
+- NeuMan is available first; MVHumanNet++ remains deferred. DNA-Rendering access
+  is approved; [Part 1 acquisition and integration notes](dna-rendering.md)
+  record its inventory, current Drive quota blocker and required SMPL-X-to-SMPL
+  geometry work. The independent DNA loader and manifest preparation are
+  implemented and synthetically tested; no real DNA training/adapter result
+  is claimed.
 - Train on NeuMan training frames and evaluate held-out frames of the same six
   sequences. This is development, not unseen-identity generalization. NeuMan is
   no longer an untouched external test set after it influences development.
@@ -67,6 +72,21 @@ rate are explicit diagnostic settings, not the full training protocol. The
 pilot checkpoint has a separate format and must not be passed off as an identity
 model ready for animator training.
 
+The 1,000-update pilot **8712331** completed training in about four minutes.
+Foreground PSNR rose **8.48 → 17.33 dB**, LPIPS fell **0.14946 → 0.04062**,
+and silhouette IoU rose **0.85675 → 0.95484**. Its final image has recognizable
+subject clothing and pose, but smeared facial/hat detail and surface artifacts.
+This is fixed-target fitting, with four fixed training references and no held-out
+evaluation. The later strict continuation gate failed: identical scalar loss,
+maximum parameter difference **9.80e-7**, maximum RGB difference **0.02911**.
+Diagnostic **8718691** separately verifies exact model/optimizer/RNG restoration
+at this checkpoint, then reproduces similar errors in repeated updates of the
+same model instance: maximum RGB difference **0.02686**, mean **2.713e-5**.
+The fresh-instance comparison gives maximum **0.03094**, mean **2.638e-5**.
+Pre-update predictions are identical in both branches. This supports local GPU
+update variability; it does not establish long-run reproducibility. The original
+failed result and tolerance are preserved.
+
 `configs/neuman_smoke.yaml` / `scripts/training_smoke_slurm.sh` exercise the real
 training CLI with eight updates per stage, effective batch two and two animator
 warmup updates, retaining the intended model dimensions and image resolution.
@@ -75,6 +95,25 @@ uses all 44 validation frames. `--stop-after-update` preserves the configured
 cosine schedule and forces a checkpoint at the requested boundary. This short
 schedule validates integration only; it cannot establish learned-avatar quality.
 The 10,000-update development schedule remains separate in `configs/neuman.yaml`.
+The short CLI smoke passed as job **8711371** (4 min 14 s), including both
+fresh-process resumes and evaluation on all 44 validation frames. CPU checkpoint
+audit **8712242** verified update history, optimizer/scheduler state, finite
+tensors, validation checkpoint selection and exact preservation of the frozen
+identity state in the animator checkpoints. Both best checkpoints came from
+update four. Eight updates are insufficient for useful reconstruction quality;
+full development training remains unrun.
+
+Live inference checks the three encoder download receipts against the feature
+provenance stored in the training checkpoint. This rejects changed encoder
+revisions and missing files before model loading; receipts alone do not verify
+the current contents of arbitrary local files. The one-GPU RGB inference smoke
+**8712233 passed in 68 s**, using live encoders, the selected update-four
+checkpoint and 8,192 Gaussians. Guarded execution did not open SMPL/fitting
+files through Python's audited file interface. Input preparation used NeuMan
+annotations for crops and intrinsics; this does not establish annotation-free
+preprocessing or an operating-system sandbox. The inspected render is a coarse,
+inverted T-shaped figure with clipped legs, so useful animation and appearance
+remain unverified despite successful execution.
 
 ## Intended architecture and training
 
@@ -91,6 +130,41 @@ project MLP has two hidden layers of `decoder_width` with SiLU activations;
 the paper does not specify that depth or activation. Rotation starts at identity,
 translation at the training mean, and local residuals at zero. An initial shared
 global head and linear token projection were corrected before any real training.
+
+### Translation range limitation on NeuMan
+
+The implementation follows [LUNA equation 3](https://arxiv.org/html/2606.31981v2#S3.SS2)
+literally: `translation = mean + std * tanh(raw)`. Consequently each global
+translation axis is restricted to one training standard deviation around the
+mean. The statistics use all training frames with equal frame weight and the
+population standard deviation, while training samples scenes uniformly; this
+difference in weighting is an explicit implementation choice.
+
+CPU audit **8712364** measures the consequence with the actual SMPL root-pivot
+correction and camera conventions: **222/344 training frames (64.5%)** and
+**24/44 validation frames (54.5%)** have an annotated root outside that box on
+at least one axis. Every Seattle training/validation frame exceeds the upper
+depth bound. Minimum distance to the closed box averages **0.228 m** on training
+frames and **0.164 m** on validation frames, with maxima **1.224 / 0.767 m**.
+CPU statistics match the saved CUDA checkpoint statistics within **5.97e-8 m**.
+
+This is a limitation of the global head under this dataset adaptation, not a
+lower bound on full-model reconstruction error: unbounded local position
+residuals can absorb a common translation offset after warmup. During global-only
+warmup, that compensation is unavailable. The paper equation is retained;
+changing the range would be an explicit ablation, not a silent correction.
+No test frames or validation-derived statistics were used to set the bounds.
+Reproduce with `scripts/audit_translation_range.py`; the report includes every
+training/validation root and per-scene summaries. Exact observed bounds and
+artifact paths are in [experiments.md](experiments.md).
+
+Another preprocessing consideration: the current tight foreground driver crops
+discard absolute image position and apparent body-size cues from the source
+frame. Crop-adjusted camera intrinsics reach the renderer, but are not an input
+to the animator. This can make camera-space root translation harder to infer;
+the exact effect has not been measured. A full-frame driver experiment should
+be considered separately, with new motion-cache provenance, before claiming
+translation generalization beyond this development protocol.
 
 Development schedules: teacher 10k updates and animator 10k updates, effective
 batch 16, LR 4e-4, AdamW betas (.9,.95), weight decay 5e-4, gradient clipping .1,

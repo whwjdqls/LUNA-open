@@ -1,5 +1,12 @@
 # NeuMan data and geometry
 
+For the newly authorized larger dataset, see the separate
+[DNA-Rendering Part 1 acquisition and integration notes](dna-rendering.md).
+Its camera, mask and body-model conventions differ from NeuMan's.
+The dataset factory dispatches DNA manifests to the independent lazy SMC loader;
+its current evidence is synthetic tests, with raw-data and SMPL-conversion
+validation pending. See that document for private inspection/preparation commands.
+
 ## Acquisition
 
 Official source: [Apple NeuMan](https://github.com/apple-aiml-research/ml-neuman),

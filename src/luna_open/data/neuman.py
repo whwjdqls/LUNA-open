@@ -277,6 +277,9 @@ class NeuManDataset(Dataset):
     def __len__(self) -> int:
         return len(self.items)
 
+    def frame_annotation(self, scene: str, row: dict) -> dict[str, np.ndarray]:
+        return frame_annotation(self.root / scene, row)
+
     def load_frame(self, scene: str, name: str) -> dict:
         row = self.lookup[scene][name]
         path = self.root / scene

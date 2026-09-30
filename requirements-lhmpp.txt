@@ -1,0 +1,16 @@
+# Additive native LHM++ requirements in the isolated baseline environment.
+# Install with -c requirements-baselines-resolved.txt to preserve the LHM versions.
+# B200 execution is a separate gate; cu126 spconv does not prove sm_100 support.
+-r requirements-baselines.txt
+--find-links https://data.pyg.org/whl/torch-2.8.0+cu128.html
+torch-scatter==2.1.2+pt28cu128
+spconv-cu126==2.3.8
+cumm-cu126==0.7.11
+timm==1.0.15
+# Retain the already verified baseline version instead of downgrading to upstream 0.2.38.
+jaxtyping==0.3.11
+typeguard==2.13.3
+loguru==0.7.3
+# FlashAttention 2.8.2 and pointops are built separately inside Slurm; see
+# scripts/build_flash_attention.sh and scripts/build_lhmpp_extensions.sh.
+# Do not install 2.8.3: xformers 0.0.32.post2 rejects its external backend.

@@ -30,7 +30,7 @@ Additional sources actually reviewed:
 | [gsplat](https://docs.gsplat.studio/versions/1.5.3/apis/rasterization.html) | 1.5.3 | wxyz quaternions, world-to-camera matrices, expected-depth output; CUDA gradients require actual GPU verification. |
 | [HumanRAM](https://arxiv.org/html/2506.03118) | paper/project | Pose-conditioned 2D rendering does not provide LUNA's explicit avatar/animator; no code adopted. |
 | [MVHumanNet++](https://github.com/GAP-LAB-CUHK-SZ/MVHumanNet_plusplus) | `936fa9508e865cae8afa1cdc02130433a3481482` | Deferred dataset; enhanced masks and SMPL-X data, dataset-specific calibration. |
-| [DNA-Rendering](https://github.com/DNA-Rendering/DNA-Rendering) | `a84cb31b934128fdfc1b324de3559909ffad39e2` | Deferred dataset; SMC camera/distortion handling must have its own adapter. |
+| [DNA-Rendering](https://github.com/DNA-Rendering/DNA-Rendering) | `a84cb31b934128fdfc1b324de3559909ffad39e2` | Access approved; Part 1 inventory and public SMC reader reviewed September 28. Bulk downloads blocked by Drive quota. [Dataset notes](dna-rendering.md) separate source conventions from pending raw-data checks. |
 
 ## Inspection details and gaps
 

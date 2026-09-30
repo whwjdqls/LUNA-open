@@ -1,9 +1,12 @@
+import json
+
 import pytest
 
 from luna_open.provenance import (
     file_sha256,
     validate_body_asset,
     validate_identity_transfer,
+    validate_inference_assets,
     verify_sources,
 )
 
@@ -41,3 +44,22 @@ def test_identity_transfer_preserves_point_correspondence_and_inputs():
         validate_identity_transfer(
             checkpoint, {**config, "smpl_pose_blend_shapes": False}, metadata
         )
+
+
+def test_inference_rejects_encoder_revision_changes(tmp_path):
+    metadata = {}
+    for kind, key in (("body", "sapiens_body"), ("face", "dino_face"), ("motion", "dino_motion")):
+        asset = dict(repo=f"test/{key}", revision="expected", files=["weights.bin"])
+        metadata[kind] = dict(asset=asset)
+        (tmp_path / key).mkdir()
+        (tmp_path / key / "weights.bin").write_bytes(b"test fixture")
+        (tmp_path / f"{key}-receipt.json").write_text(
+            json.dumps(dict(status="downloaded", **asset))
+        )
+    validate_inference_assets(metadata, tmp_path)
+    path = tmp_path / "dino_motion-receipt.json"
+    changed = json.loads(path.read_text())
+    changed["revision"] = "another-model-revision"
+    path.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="motion"):
+        validate_inference_assets(metadata, tmp_path)

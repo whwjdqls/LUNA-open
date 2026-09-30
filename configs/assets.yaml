@@ -19,3 +19,24 @@ lhmpp_700m:
   repo: 3DAIGC/LHMPP-700M
   revision: fc9f73664b9bfcc457e96210ddc06fe7caf0d559
   files: [config.json, configuration.json, model.safetensors]
+# Native auxiliary inputs for the released LHM++ baseline, separate from our SMPL.
+# Selected by tracing BaseSkinning/SMPLXVoxelSkinning/ResNetArcFace at the source pin.
+lhmpp_prior:
+  repo: 3DAIGC/LHMPP-Prior
+  revision: b683c8f68bede4f318b0bb539730b8e6711d30a0
+  files:
+    - configuration.json
+    - arcface_resnet18.pth
+    - dense_sample_points/1_160000.ply
+    - human_model_files/smplx/SMPLX_NEUTRAL.npz
+    - human_model_files/smplx/SMPLX_MALE.npz
+    - human_model_files/smplx/SMPLX_FEMALE.npz
+    - human_model_files/smplx/SMPL-X__FLAME_vertex_ids.npy
+    - human_model_files/smplx/MANO_SMPLX_vertex_ids.pkl
+    - human_model_files/flame/FLAME_NEUTRAL.pkl
+    - human_model_files/flame/2019/generic_model.pkl
+    - human_model_files/flame/flame_static_embedding.pkl
+    - human_model_files/flame/flame_dynamic_embedding.npy
+    - human_model_files/flame/Readme.pdf
+    - voxel_grid/cano_1_volume.npz
+    - voxel_grid/human_prior_constrain.npz

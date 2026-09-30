@@ -59,7 +59,9 @@ See [docs/references.md](docs/references.md) for initial findings and entry poin
 
 The initial repository contained only guidance and research notes. Implementation
 is underway; consult README and docs/experiments.md for verified status. The user
-selected **SMPL instead of MHR** and **NeuMan first** (larger datasets are not yet
-available). Preserve these decisions and label them as deviations. Document every
+selected **SMPL instead of MHR** and **NeuMan first**. DNA-Rendering access is now
+approved; Part 1 bulk download is blocked by Drive quotas, as documented in
+`docs/dna-rendering.md`. MVHumanNet++ remains unavailable. Preserve these decisions
+and label them as deviations. Document every
 material consideration and actual test result. Use Slurm allocations for heavy
 work; one-GPU smoke tests are authorized. Never report an unrun path as verified.

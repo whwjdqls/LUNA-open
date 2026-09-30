@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.11", "ninja>=1.11"]
 features = ["transformers>=4.56,<5", "huggingface-hub>=0.34", "lpips==0.1.4"]
+dna = ["h5py==3.16.0"]
 
 [project.scripts]
 luna-data = "luna_open.data.neuman:main"

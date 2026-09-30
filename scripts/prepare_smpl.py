@@ -1,4 +1,4 @@
-"""Prepare a user-supplied licensed legacy SMPL file; preserve the original."""
+"""Prepare a licensed legacy SMPL/FLAME numeric copy; preserve the original."""
 
 import argparse
 import json
@@ -7,7 +7,7 @@ import pickle
 from datetime import datetime, timezone
 from pathlib import Path
 
-from luna_open.body_assets import array_metadata, read_numeric_smpl
+from luna_open.body_assets import array_metadata, read_numeric_flame, read_numeric_smpl
 from luna_open.provenance import file_sha256
 
 
@@ -15,12 +15,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--model-type", choices=("smpl", "flame"), default="smpl")
     args = parser.parse_args()
     receipt_path = args.output.with_suffix(".receipt.json")
     if args.output.exists() or receipt_path.exists():
         raise FileExistsError("Select a new output path; existing assets are never overwritten")
     source_hash = file_sha256(args.source)
-    model, changes = read_numeric_smpl(args.source)
+    reader = read_numeric_smpl if args.model_type == "smpl" else read_numeric_flame
+    model, changes = reader(args.source)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output.with_suffix(".part")
     with temporary.open("xb") as stream:
@@ -36,6 +38,7 @@ def main():
     temporary.replace(args.output)
     receipt = dict(
         created_utc=datetime.now(timezone.utc).isoformat(),
+        model_type=args.model_type,
         source=str(args.source.resolve()),
         source_bytes=args.source.stat().st_size,
         source_sha256=source_hash,
@@ -46,7 +49,7 @@ def main():
         arrays=array_metadata(model),
         numeric_roundtrip_exact=True,
         converter_sha256=file_sha256(Path(__file__).parents[1] / "src/luna_open/body_assets.py"),
-        license="User-supplied asset; original body-model terms continue to apply",
+        license="Original body-model terms continue to apply; source provenance recorded above",
     )
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps({k: v for k, v in receipt.items() if k != "arrays"}, indent=2), flush=True)

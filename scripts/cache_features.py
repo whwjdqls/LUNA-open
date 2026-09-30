@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -10,12 +11,15 @@ import torch
 import yaml
 from PIL import Image
 
-from luna_open.data.neuman import NeuManDataset, load_mask, mask_path
+from luna_open.data import dataset_from_manifest
+from luna_open.data.neuman import load_mask, mask_path
 from luna_open.features import DinoFeatures, SapiensFeatures
 from luna_open.provenance import verify_sources
 
 
 def face_image(dataset, scene, name):
+    if hasattr(dataset, "face_image"):
+        return dataset.face_image(scene, name)
     root = dataset.root / scene
     keypoints_path = root / "keypoints" / (name + ".npy")
     keypoints = np.load(keypoints_path, allow_pickle=False)[:5]
@@ -50,18 +54,49 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--kind", choices=["body", "face", "motion"], required=True)
     parser.add_argument("--limit", type=int, default=0, help="Smoke-only limit; default all frames")
+    parser.add_argument(
+        "--max-cache-gib",
+        type=float,
+        default=32,
+        help="Per-kind DNA cache budget, including existing selected features",
+    )
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("Feature extraction must run in a GPU allocation")
-    verify_sources(args.data_root, json.loads(args.manifest.read_text()))
+    document = json.loads(args.manifest.read_text())
+    verify_sources(args.data_root, document)
+    dna = document.get("dataset") == "dna_rendering"
+    if dna:
+        if args.max_cache_gib <= 0:
+            raise ValueError("DNA cache budget must be positive")
+        elements = dict(body=4096 * 1536, face=4 * 1024 * 1024, motion=1024 * 1024)
+        per_frame = elements[args.kind] * 2 + 1024**2  # serialization/headroom allowance
+        rows = [
+            (scene, row) for scene, info in document["scenes"].items() for row in info["frames"]
+        ]
+        if len(rows) * per_frame > args.max_cache_gib * 1024**3:
+            raise ValueError(
+                "Selected DNA observations exceed the cache budget; reduce the sampling plan"
+            )
+        args.output.mkdir(parents=True, exist_ok=True)
+        missing = sum(
+            not (args.output / args.kind / scene / (Path(row["name"]).stem + ".pt")).exists()
+            for scene, row in rows
+        )
+        if missing * per_frame + 20 * 1024**3 > shutil.disk_usage(args.output).free:
+            raise ValueError("Insufficient free storage for DNA features plus 20 GiB reserve")
     catalog = yaml.safe_load(Path("configs/assets.yaml").read_text())
     key = dict(body="sapiens_body", face="dino_face", motion="dino_motion")[args.kind]
     metadata = dict(
         manifest_sha256=hashlib.sha256(args.manifest.read_bytes()).hexdigest(),
         asset=catalog[key],
-        preprocessing_version=1,
+        preprocessing_version=2 if dna else 1,
         kind=args.kind,
-        face_crop="supplied keypoints confidence>=.3, 2.5x bbox, fallback upper35%",
+        face_crop=(
+            document["preprocessing"]["face_crop"]
+            if dna
+            else "supplied keypoints confidence>=.3, 2.5x bbox, fallback upper35%"
+        ),
         dtype="float16",
         checkpoint_inputs="frozen real pretrained features",
     )
@@ -78,7 +113,7 @@ def main():
     else:
         model = DinoFeatures(directory, args.kind)
     model = model.cuda().eval()
-    data = NeuManDataset(args.data_root, args.manifest, size=1024)
+    data = dataset_from_manifest(args.data_root, args.manifest, size=1024, verify=False)
     count = 0
     for scene, info in data.metadata.items():
         for row in info["frames"]:

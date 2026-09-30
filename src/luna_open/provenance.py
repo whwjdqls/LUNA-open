@@ -1,6 +1,7 @@
 """Content fingerprints for inputs that must stay fixed across a run."""
 
 import hashlib
+import json
 from pathlib import Path
 
 
@@ -40,3 +41,21 @@ def validate_identity_transfer(checkpoint: dict, config: dict, feature_metadata:
     for kind in ("body", "face"):
         if checkpoint["feature_metadata"].get(kind) != feature_metadata.get(kind):
             raise ValueError(f"Identity checkpoint feature metadata differs: {kind}")
+
+
+def validate_inference_assets(feature_metadata: dict, assets: Path) -> None:
+    """Require the encoder revisions used to create a checkpoint's training inputs.
+
+    Download receipts identify revisions; they do not prove arbitrary local file
+    edits have not occurred. Content audits remain separate acquisition evidence.
+    """
+    for kind, key in (("body", "sapiens_body"), ("face", "dino_face"), ("motion", "dino_motion")):
+        expected = feature_metadata[kind]["asset"]
+        receipt = json.loads((assets / f"{key}-receipt.json").read_text())
+        if receipt.get("status") != "downloaded" or any(
+            receipt.get(field) != expected[field] for field in ("repo", "revision", "files")
+        ):
+            raise ValueError(f"Inference encoder receipt differs from training inputs: {kind}")
+        for filename in expected["files"]:
+            if not (assets / key / filename).is_file():
+                raise FileNotFoundError(assets / key / filename)

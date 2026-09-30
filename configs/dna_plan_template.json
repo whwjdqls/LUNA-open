@@ -1,0 +1,20 @@
+{
+  "protocol": "TEMPLATE: custom seen-sequence development; replace IDs and validate selected observations before use",
+  "world_unit_to_meter": null,
+  "world_unit_evidence": "REPLACE with the raw-data camera/SMPL-X scale audit",
+  "identity_disjoint": false,
+  "scenes": {
+    "ACTOR_TAKE": {
+      "actor_id": "ACTOR",
+      "rgb": "part1/dna_rendering_part1_main/ACTOR_TAKE.smc",
+      "annotations": "part1/dna_rendering_part1_annotations/ACTOR_TAKE_annots.smc",
+      "reference_pool": [[1, 0], [13, 0], [25, 0], [37, 0]],
+      "references": [[1, 0], [13, 0], [25, 0], [37, 0]],
+      "splits": {
+        "train": [[1, 1], [13, 1], [25, 1], [37, 1]],
+        "val": [[3, 1]],
+        "test": [[3, 2]]
+      }
+    }
+  }
+}

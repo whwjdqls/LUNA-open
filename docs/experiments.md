@@ -413,20 +413,693 @@ project storage, not Git.
   utilization. Start forecasts have fluctuated sharply; the short cache job
   actually started earlier than previously shown estimates.
 
+### Real two-stage training, resume and checkpoint audit completed
+
+- One-B200 job **8711371 completed**, exit 0, **4 min 14 s** on `dgx015`.
+  Submitted at 15:46:10 EDT, started at **16:59:47** and ended at **17:04:01**
+  on 2026-09-25: a 1 h 13 min 37 s queue wait. This is the actual run timing,
+  not the earlier changing scheduler forecast.
+- `configs/neuman_smoke.yaml` retained 8,192 queries, width 1,024, five attention
+  blocks, 16 heads and 512px rendering. It used actual cached Sapiens/DINO
+  features, the verified SMPL teacher, LPIPS and AdamW. Diagnostic deviations:
+  eight updates per stage, effective batch two, two global-only animator warmup
+  updates, and validation/checkpoints every four updates.
+- Identity updates 1–4 and 5–8 ran in separate Python processes. Animator
+  updates 1–4 and 5–8 likewise ran in separate processes, initialized from the
+  best identity checkpoint. A fifth process evaluated the best animator on all
+  **44 validation frames across six scenes**. All logged losses and metrics
+  were finite. The local animator losses start after the two warmup updates.
+- Validation LPIPS at updates 4 / 8: identity **0.151123 / 0.152043**;
+  animator **0.376751 / 0.404253**. Both best checkpoints select **update 4**.
+  The final animator validation report therefore evaluates update 4, not 8.
+  Scene-macro metrics: PSNR **11.2774 dB**, L1 **0.121501**, SSIM **0.811768**,
+  mask IoU **0.128699**, LPIPS **0.376751**. These are integration-smoke
+  measurements with poor image/mask quality, not benchmark-quality results.
+  White-background full-image metrics must not be interpreted as foreground
+  reconstruction quality. Random target sampling also prevents treating the
+  short training-loss sequence as a controlled convergence comparison.
+- Artifacts: project `runs/neuman-smoke-v1/{identity,animator}/{best,latest}.pt`,
+  training JSONL files and `runs/neuman-smoke-v1/animator/val-metrics.json`;
+  log `logs/training-smoke-8711371.log`. Full 10k-update development training,
+  useful-avatar overfitting and test-set model evaluation remain unrun.
+- CPU audit **8712242 completed**, exit 0, **37 s**. Full CPU suite:
+  **26 passed in 12.69 s**, including a new test rejecting a changed motion
+  encoder receipt at inference. The CPU job's NVML initialization warning did
+  not prevent tests; it does not indicate a GPU training failure.
+- `scripts/audit_training.py` checked contiguous update histories, exact cosine
+  learning rates, warmup loss membership, config/input/feature/body provenance,
+  finite model/optimizer tensors, scheduler epochs, optimizer steps, selected
+  best checkpoints and all 44 validation entries. Identity best/latest AdamW
+  steps are 4/8. Animator step ranges are 2–4 and 6–8, reflecting the local
+  branch's two skipped warmup updates. Both animator checkpoints preserve the
+  exact identity-best tensor hash
+  `017efa68b2e9971a4af5d5771f72c89931166062d427fcd893524e0d34001f11`.
+- Read and accepted `outputs/training-smoke-audit.json`, which records full
+  checkpoint hashes and byte counts. Checkpoint SHA256 values:
+
+  | Checkpoint | SHA256 |
+  | --- | --- |
+  | identity/best.pt | `2bbe15b963e9747efa31ee7034aee66c0dbad8bf1bfa8e0473aadb918b1a3836` |
+  | identity/latest.pt | `c75979603374794a627b2dcb7bd7fb1302394744869a136be62e9d7757ac45be` |
+  | animator/best.pt | `f641094b3e63a60257a1d93bada2b9c2706fd5ff7b25dde5f35f9b7678b40584` |
+  | animator/latest.pt | `da0d27410665b1e535adf1a07591a8f43bbfd5fe36948e29729ea73faf00cb4c` |
+
+- Added `scripts/smoke_inference.py`; submitted **8712233**, one B200 with a
+  five-minute limit. It remains `PENDING (Priority)`. The script prepares four
+  real training references, face crops, one validation driver and crop intrinsics,
+  then runs the pretrained image encoders and our best smoke animator. A Python
+  audit hook rejects opens of the SMPL asset and supplied pose/alignment files
+  during model execution. This guard is not an operating-system sandbox;
+  annotated crop/camera preparation occurs before it is enabled.
+- Inference must produce finite 8,192-point Gaussian attributes and 512px
+  RGB/alpha output; it saves images, Gaussian NPZ and provenance/report under
+  `outputs/inference-smoke-8712233/`. These results are not yet claimed. Live
+  BF16 feature extraction versus stored FP16 training features is not asserted
+  to be numerically identical. Encoder receipt checks establish expected pinned
+  revisions and file presence, not tamper-proof current file content.
+- At **17:16 EDT**, inference job 8712233 still reports `PENDING (Priority)`.
+  Final local Ruff lint/format checks pass for all **46 Python files**;
+  `git diff --check` passes. No duplicate GPU job was submitted.
+
+### Longer fixed-target pilot queued; translation range audit completed
+
+- Added intermediate inspections to `scripts/pilot_identity.py`: a render,
+  alpha image, objective and metrics every 100 updates. `inspections.json` is
+  updated during training so a later failure cannot erase that evidence.
+  Foreground PSNR measures RGB squared error only where target alpha is at least
+  0.5; predictions are not multiplied by the target mask. Existing full-image
+  metrics remain available. Nonempty output directories are now rejected to
+  avoid mixing the history of a failed run with a retry.
+- Submitted **8712331**, one B200, 15-minute limit, **1,000 identity updates**
+  using the same real bike training target and four distinct references as the
+  original pilot. It depends on inference job 8712233 finishing (`afterany`),
+  enforcing sequential GPU use without assuming inference will pass. It is
+  currently pending. The original strict continuation thresholds are unchanged;
+  a failed continuation comparison will remain a failure even if training
+  improves. Training reports are saved before that check. Useful appearance
+  learning still requires inspecting the intermediate/final renders and metrics.
+- Planned artifacts: `outputs/identity-overfit-8712331/`, including the
+  inspection history, target/renders and checkpoint; log
+  `logs/identity-overfit-8712331.log`. No outcome from this queued run is claimed.
+- Rechecked [LUNA equation 3](https://arxiv.org/html/2606.31981v2#S3.SS2):
+  `mean + std * tanh(raw)` restricts each global translation axis to one standard
+  deviation. Added `scripts/audit_translation_range.py` to quantify the concern
+  using actual training/validation annotations and the same teacher/statistics
+  implementation. `translation_statistics` now puts tensors on the teacher's
+  device, allowing this CPU audit; the formula and CUDA training behavior are
+  unchanged.
+- CPU job **8712364 completed**, exit 0, **37 s**. All **26 tests passed in
+  15.44 s**. The report was read and accepted:
+  `outputs/translation-range-audit.json`. It fingerprints the manifest, SMPL
+  and animator-best checkpoint, and checks the checkpoint's stored statistics
+  against independent CPU recomputation (max mean difference **3.73e-9 m**,
+  max std difference **5.96e-8 m**).
+- Statistics from the **344 training frames only**, axes x/y/z in camera meters:
+
+  | Quantity | x | y | z |
+  | --- | ---: | ---: | ---: |
+  | Mean | 0.047031 | -0.266746 | 3.016042 |
+  | Population std | 0.465919 | 0.091013 | 0.721820 |
+  | Lower reachable limit | -0.418889 | -0.357759 | 2.294222 |
+  | Upper reachable limit | 0.512950 | -0.175734 | 3.737861 |
+
+- Annotated roots outside at least one bound: **222/344 train (64.5%)** and
+  **24/44 val (54.5%)**. Train outside counts per axis: 101 / 93 / 102; val:
+  11 / 9 / 8. All **33 train and 4 val Seattle frames** exceed the upper z bound.
+  Distance to the closest closed-box point: train mean / p95 / max
+  **0.227559 / 0.792480 / 1.224015 m**; val **0.164123 / 0.645806 / 0.766966 m**.
+  Tanh's endpoints are approached only asymptotically, so the closed box is an
+  optimistic bound for finite logits.
+- This diagnostic does not evaluate a trained translation predictor or claim a
+  bound on full-model image quality: local Gaussian residuals can compensate
+  after global warmup. It identifies a concrete initialization/optimization
+  limitation of applying the paper formula literally to NeuMan. No formula was
+  changed, no test frames inspected, and validation did not define the bounds.
+
+### Native baseline prior acquisition and remaining correspondence input
+
+- Reverified LHM++ source HEAD
+  `906b5d9fb967ab42efb92f6fa55bf22cac86b653` and inspected its model registry,
+  released checkpoint config, `BaseSkinning`, diffused voxel/query code and
+  ArcFace initialization. The official
+  [LHMPP-Prior bundle](https://huggingface.co/3DAIGC/LHMPP-Prior/tree/b683c8f68bede4f318b0bb539730b8e6711d30a0)
+  is public at revision `b683c8f68bede4f318b0bb539730b8e6711d30a0` and lists 59
+  files. The root has no model-card/license metadata; component terms remain
+  separate from the source-code license.
+- Added a pinned `lhmpp_prior` catalog entry and downloaded only **15 relevant
+  files (1,468,193,882 bytes)**. Native SMPL-X gender models, FLAME models and
+  mappings, fixed query points, voxel volume/constraints, ArcFace and included
+  documentation are stored under external `assets/lhmpp_prior/`. No existing
+  source checkout or main Python environment was modified for this acquisition.
+- Added `scripts/verify_assets.py`: verify receipt/pin, selected file membership,
+  lengths and upstream LFS SHA256 or ordinary Git blob SHA1, without executing
+  checkpoint code. CPU **8712422 completed**, exit 0, **5 s**. Read and accepted
+  `outputs/lhmpp-prior-audit.json`; all 15 files match their upstream hashes.
+  Runtime compatibility and native output quality remain unverified.
+- Inspected the official converter instructions vendored in the baseline.
+  `smpl2smplx_deftrafo_setup.pkl` and `smplx_mask_ids.npy` must come from the
+  registered SMPL-X site's **Model correspondences** download; neither is in
+  this public bundle or the current asset directory. Requested them from the
+  user for external `assets/body_transfer/`. Our model's SMPL asset and training
+  are independent of this baseline transfer requirement.
+- The current foreground driver crop removes absolute position/apparent scale
+  cues while the animator does not receive the adjusted camera intrinsics.
+  Recorded this additional unmeasured translation-generalization concern in
+  implementation.md. A future full-frame driver comparison requires a distinct
+  motion cache and explicit preprocessing provenance; no current result is
+  presented as that comparison.
+
+### Isolated native LHM runtime bootstrap started
+
+- Started a separate Python 3.11 venv at project `envs/lhm/`, installing
+  `requirements-baselines.txt`. The pip process remains live; success is not yet
+  claimed. Main LUNA environment packages are not part of this installation.
+  The new requirements deliberately adapt Torch/CUDA/torchvision/gsplat/xformers
+  for B200 while isolating older baseline Transformers and NumPy from LUNA.
+- Acquired pinned PyTorch3D, BasicSR and ashawkey Gaussian-rasterizer sources,
+  including the pinned GLM submodule. Revisions are listed in baselines.md and
+  `scripts/checkout_references.py`. All checkout processes completed successfully.
+- Added `scripts/build_baseline_extensions.sh` for compilation on a Slurm CPU
+  allocation with CUDA 12.8.1, `FORCE_CUDA=1`, `TORCH_CUDA_ARCH_LIST=10.0` and
+  four parallel compilation workers. It uses the isolated baseline interpreter
+  and a separate extension cache, checks package dependencies, then checks
+  native LHM imports and a CPU nearest-neighbor result. It has not run yet.
+- This is preparation for the actual released LHM model, not replacement with
+  our network or a random-feature baseline. Native checkpoint construction,
+  rendering, conversion and B200 output checks remain pending. LHM++ has
+  additional runtime requirements beyond these shared baseline dependencies.
+- Final static checks pass for **48 Python files**, shell syntax, local
+  documentation links and `git diff --check`. At **17:41 EDT**, the original
+  baseline pip process is confirmed live; inference **8712233** is still
+  `PENDING (Priority)` and identity overfit **8712331** is `PENDING (Dependency)`.
+  Existing processes remain live; no replacement or duplicate was submitted.
+
+### Source meshes exported; baseline compilation started
+
+- The original baseline package-install process completed successfully; its
+  installed versions and full output are in `logs/baseline-env-install.log`.
+  The delay was shared-filesystem installation work, not a terminal process
+  failure. It was not restarted. The separate main LUNA environment was not
+  modified by this installation.
+- Submitted CPU extension build **8712665**, eight CPU threads, four compiler
+  workers, 30-minute limit. It is running. Initial `pip check` passes and
+  PyTorch3D wheel compilation has begun. No final compilation/import/GPU result
+  is claimed yet. Log: `logs/baseline-build-8712665.log`.
+- Added `scripts/export_smpl_meshes.py` and ran CPU **8712663**, **34 s**, exit 0,
+  to prepare the official converter's source geometry. It exported **68
+  camera-space OBJ meshes**: 44 validation targets plus four training references
+  per scene. The report `benchmarks/neuman-v2/smpl-meshes-val/meshes.json` was
+  read and its membership confirmed. All meshes have 6,890 vertices / 13,776
+  faces; coordinates use native SMPL meters, x right / y down / z forward.
+  No test frames were included in this validation export.
+- The exporter matches NeuMan's omitted pose-corrective convention by zeroing
+  `posedirs` only in its private smplx forward instance; original/converted
+  asset bytes remain fixed. Comparison to the training teacher's 8,192 surface
+  samples gives **0 maximum absolute FP32 error** for every exported input.
+  All projected vertices are finite with positive depth; smallest z is
+  **0.821308 m**. The report records source/body hashes, each OBJ hash, K,
+  alignment scale and exact frame/reference identifiers.
+- This export supplies source meshes for fitting, not native SMPL-X parameters.
+  Converter parsing, fitted surface error and rendered alignment remain
+  unverified until the correspondence files and converter are available.
+- `scripts/write_env_lock.py` now accepts `--output` so the baseline environment
+  can record its installed versions separately without replacing LUNA's lock.
+  The default destination is unchanged. A final baseline snapshot will be
+  recorded after source dependency installation.
+
+### Native dependency build and prior acquisition completed
+
+- CPU build **8712665 completed**, exit 0, **14 min 49 s**. PyTorch3D 0.7.9 and
+  ashawkey's Gaussian rasterizer compiled for B200 `sm_100`; BasicSR installed
+  from its recorded commit. Final `pip check`, native LHM module import and CPU
+  nearest-neighbor checks passed. These results establish build/import success,
+  not native checkpoint construction or GPU inference.
+- Added `scripts/download_lhm_prior.py` to inspect the official 18.8 GB
+  uncompressed prior archive using HTTP byte ranges. It checks range boundaries,
+  ETag consistency and lengths, writes SHA256 receipts, and preserves existing
+  selected files. The multipart ETag is not treated as a cryptographic hash.
+- Acquired **17 native files / 1,576,055,538 bytes**, including LHM's exact
+  40,000 query points, voxel-192 data, SMPL-X/FLAME assets, ArcFace,
+  RealESRGAN and face detector/parser weights. The 148-file archive index and
+  selected receipts are under `assets/lhm_prior_official/`. This avoids silently
+  substituting LHM++'s different query/voxel data or regenerating random points.
+- Downloaded GFPGANv1.3 and original-format DINOv2-L/registers from their official
+  upstream URLs. Paths, sizes and full hashes are recorded in assets.md.
+  GFPGAN/facexlib package installation is in progress in the isolated baseline
+  environment; no constructor or face-enhancement execution is claimed yet.
+- CPU audit **8712755 completed**, exit 0, **5 s**. All 17 native files match
+  their acquisition receipts; twelve overlapping files are byte-identical to
+  the independently hash-verified LHM++ prior bundle. Both additional bootstrap
+  weights were hashed. Report: `outputs/lhm-prior-audit.json`.
+- Static inspection identifies bare `chumpy.ch.Ch` in both native FLAME
+  pickles. Compatibility still needs verification; originals are preserved.
+  The actual LHM head-image path uses face enhancement, so disabling that stage
+  would change the released baseline. Source tracing and pending checks are
+  recorded in baselines.md.
+- At **18:04 EDT**, inference **8712233** remains `PENDING (Priority)` and the
+  1,000-update identity pilot **8712331** remains `PENDING (Dependency)`. No new
+  GPU results or useful reconstruction quality are claimed.
+
+### Face package imports verified; legacy FLAME incompatibility confirmed
+
+- GFPGAN **1.3.8** and facexlib **0.3.0** installed successfully in `envs/lhm/`,
+  constrained by the isolated baseline requirements. Added both direct version
+  pins. Final `pip check` passes. Log: `logs/baseline-face-install.log`.
+- Wrote `requirements-baselines-resolved.txt` using the isolated interpreter.
+  It records installed versions separately from LUNA's environment; source-built
+  dependencies additionally require their documented commits/build commands.
+- CPU **8712972 completed**, exit 0, **47 s**. GFPGAN, facexlib detector/parser
+  helpers, BasicSR and the native LHM module import successfully. Direct loading
+  of **both FLAME pickles fails** with `ModuleNotFoundError: No module named
+  'chumpy'`. These failures are explicitly captured in
+  `outputs/baseline-cpu-check.json`; the diagnostic's zero exit status is not
+  an asset-load pass. A validated numeric conversion is still needed before
+  native model construction. No obsolete Chumpy installation or global NumPy
+  patch was introduced.
+- Static checks pass: Ruff, AST parsing of **50 Python files**, local Markdown
+  link paths and `git diff --check`. The core numerical implementation was not
+  changed by this dependency/documentation work; the previously recorded CPU
+  and training results remain the latest core tests.
+
+### RGB-input inference completed and visually inspected
+
+- One-B200 inference smoke **8712233 completed**, exit 0, **68 s**, `dgx004`.
+  It started **18:09:59 EDT** and finished **18:11:07 EDT**. The measured Python
+  workload took **52.85 s** and peak PyTorch allocation was **9,884,374,016 bytes**.
+- Used the audited animator best checkpoint (selected at update four), all
+  three live pretrained encoders, four fixed bike training references and
+  held-out bike validation driver `00052.png`. All four face inputs used
+  supplied COCO face keypoints. Encoder receipt provenance checks passed.
+- Guarded model execution did not trigger Python file opens of the SMPL asset,
+  supplied `smpl_output` files or `alignments.npy`. Annotation-assisted crop,
+  face and camera preparation occurred before the guard. This establishes that
+  tested model boundary, not an OS sandbox or annotation-free preparation.
+- Output RGB/alpha tensors were finite at 512x512; Gaussian count **8,192**,
+  alpha range **[0, 0.999900]**, alpha>=0.5 area fraction **0.113926**.
+  Report, RGB, alpha, target and Gaussian NPZ are in
+  `outputs/inference-smoke-8712233/`.
+- Visually inspected the saved prediction beside its target. The prediction is
+  a nearly uniform purple-gray, inverted T-shaped figure with clipped legs;
+  it does not reconstruct the clothed subject or driven walking pose. No useful
+  quality, generalization or feature-cache parity is claimed. The short smoke
+  checkpoint remains unsuitable for quality evaluation.
+- Identity overfit **8712331** is now eligible and `PENDING (Priority)`.
+  Existing job preserved; no replacement submitted.
+
+### FLAME compatibility and native expression-data checks
+
+- Initial narrow-reader inspection **8713023 failed** because FLAME's Chumpy
+  storage leaf has three additional fields. Storage-only inspection **8713052
+  completed**, **4 s**: both leaves contain `_make_dense=false`,
+  `_make_sparse=false`, `_status="new"`, an empty dependency cache and a numeric
+  `[5023,3,400]` array. Report: `outputs/flame-inspection.json`.
+- Extended the reader only for those inspected states, added a separate FLAME
+  schema validator, and made NumPy pickle-global resolution work in both the
+  main NumPy 2.x and baseline NumPy 1.26 environments. Added focused rejection
+  and numeric-pickle checks. `prepare_smpl.py` accepts `--model-type flame`;
+  its default SMPL behavior and existing asset files are preserved.
+- CPU **8713091 completed**, exit 0, **17 s**. The full core CPU suite passed
+  **28 tests in 9.10 s**; its sole warning is NVML unavailable on the CPU node.
+  Both native FLAME files converted under baseline NumPy 1.26.4. Their eight
+  arrays per file preserve exact dtype/shape/bytes, and numeric serialization
+  roundtrips exactly. Paths, full hashes, source reference and reproduction
+  commands are in assets.md.
+- The first native-forward audit **8713234 failed**, exit 1, **42 s**, after
+  successful construction: upstream `FLAME.forward` calls the modified LBS
+  routine without its two extra arguments. Investigated the actual baseline
+  path: it uses FLAME expression bases and vertex selection, not this standalone
+  forward. The upstream failure remains documented; no compatibility monkey
+  patch or silent replacement of the native method was applied.
+- Revised the audit to cover the actual consumers plus a separately identified
+  standard FLAME geometry check. CPU **8713256 completed**, exit 0, **52 s**.
+  Native constructors and eight geometry buffers match standard smplx; native
+  neutral-SMPL-X expression transfer is exact and all **2,176** selected vertex
+  IDs agree with original data. Standard FLAME forwards for neutral and nonzero
+  inputs agree with direct original-array calculations to **5.96e-8 m** and
+  **1.49e-8 m**. This is not a pass for the vendored standalone FLAME forward.
+  Report: `outputs/flame-numeric-audit.json`.
+- The same audit confirms all original/user-converted SMPL arrays still agree
+  exactly after the shared-reader change. Original and configured SMPL hashes
+  remain fixed, so the existing data, feature and checkpoint provenance is
+  unaffected.
+- Prepared `baselines/lhm-runtime-v1/` via `prepare_lhm_runtime.py`: **19 asset
+  links** after source-hash checks, with separate numeric FLAME copies and
+  Sapiens/GFPGAN at native relative paths. `runtime.json` records source hashes.
+- Added `smoke_lhm.py` and submitted **8713314**, one B200 / ten minutes,
+  dependent on identity pilot **8712331**. It checks actual native construction,
+  checkpoint coverage/loading and GPU KNN/xformers; no avatar or benchmark
+  score is produced by that check. Static checkpoint metadata has 721 keys,
+  with Sapiens/ArcFace omitted and supplied through their native constructors.
+  Runtime coverage is not yet claimed. Logs will be `logs/lhm-constructor-8713314.log`.
+- Final static verification passes: Ruff, AST parsing of **53 Python files**,
+  local Markdown paths, shell syntax and `git diff --check`. At **18:30 EDT**,
+  identity pilot 8712331 is confirmed `PENDING (Priority)` and native constructor
+  8713314 is `PENDING (Dependency)`. Both original submissions remain live.
+
+### LHM++ dependency preparation and preserved LHM environment
+
+- At **18:34–18:36 EDT**, the 45 GB MIG node had all **32/32** GPU slices
+  allocated, and the 90 GB MIG node had **16/16** allocated. A `MIXED` node state
+  did not indicate free GPUs. Kept the existing one-GPU requests; did not submit
+  duplicate requests or promise a scheduler start-time estimate. The inference
+  smoke's 9.88 GB allocation does not bound training memory.
+- Traced the actual LHM++ 700M configuration: SonataV3, 160,000 queries,
+  FlashAttention enabled, and gsplat feature rendering followed by its released
+  neural renderer. Its native import tree needs pointops even though the chosen
+  backbone is Sonata. The non-FlashAttention fallback changes attention execution
+  and is not accepted silently. See baselines.md for the precise findings.
+- Added isolated LHM++ requirements. The initial resolver attempt failed before
+  installation because jaxtyping 0.2.38 conflicted with the existing 0.3.11 pin;
+  retained 0.3.11. A second installation succeeded using the prior baseline
+  snapshot as constraints. `outputs/lhmpp-install.json` and
+  `logs/lhmpp-install-v2.log` record the added packages; the first failed log is
+  preserved. Main LUNA's environment was not changed.
+- Selected official Torch-2.8/cu128 torch-scatter and official cu126 spconv/cumm
+  wheels. No official cu128 spconv package was found. Native B200/NVRTC execution
+  remains unverified. Package pins, sources and compatibility choices are in
+  baselines.md; no unofficial replacement wheel was used.
+- CPU **8713408 failed**, exit 1, **3 min 18 s**. Pointops compiled and installed
+  successfully, and its extension imported. Native model import then exposed
+  xformers's explicit FlashAttention version bound: external 2.8.3 is rejected;
+  maximum supported is 2.8.2. The overall failed job is not recorded as a pass.
+  Its original log and installed pointops build are retained.
+- Removed the newly added FlashAttention 2.8.3. Initial recovery check
+  **8713479 failed in 14 s** because the check mistakenly used LHM++'s `core`
+  module prefix for LHM. Corrected the check to the actual `LHM.models` module;
+  CPU **8713480 passed in 36 s**. FlashAttention 2.8.3 is absent and both xformers
+  and native LHM import successfully again. Recovery logs are
+  `logs/lhm-flash-rollback-check{,-v2}.log`; package removal log is
+  `logs/lhmpp-flash-rollback.log`.
+- CPU **8713412 completed**, exit 0, **5 s**. Prepared the native LHM++ asset
+  layout with **15 verified links**, rehashed source files, and original-source
+  equality checks before reusing numeric FLAME. Receipt:
+  `baselines/lhmpp-runtime-v1/runtime.json`. This does not test native geometry
+  or checkpoint construction.
+- Acquired the official FlashAttention 2.8.2 source archive with its PyPI SHA256
+  and bundled CUTLASS. Added `build_flash_attention.sh`, which builds a separate
+  sm_100 wheel without installing it. CPU **8713527 is running**, eight CPUs,
+  one-hour limit; `logs/flash-attn-build-8713527.log`. Full source/build pins are
+  in baselines.md. The queued LHM job retains its restored environment.
+- Separated pointops compilation from the dependency audit so fixing attention
+  does not require a redundant rebuild. The new audit checks both native imports,
+  existing package versions, CPU segment reduction and selected FlashAttention.
+  It has not run yet; FlashAttention 2.8.2 installation and GPU checks remain.
+- At **18:55 EDT**, identity **8712331** remains `PENDING (Priority)` and LHM
+  constructor **8713314** remains `PENDING (Dependency)`. Native inference,
+  reconstruction quality and baseline scores remain unverified.
+- Final metadata comparison confirms **all 106 prior baseline package versions
+  are unchanged** and external FlashAttention is absent after rollback. Ruff,
+  AST parsing of **55 Python files**, local Markdown links, changed shell-script
+  syntax and `git diff --check` pass. The latest core numerical result remains
+  the earlier 28-test CPU suite; no core model change required repeating it.
+  At **18:58 EDT**, the two GPU jobs remain queued and CPU 8713527 is compiling
+  the attention wheel with verified `compute_100/sm_100` compiler flags.
+
+## 2026-09-26: completed runs and follow-up checks
+
+### Longer fixed-target training and continuation diagnostic
+
+- Scheduler records confirm identity pilot **8712331 failed**, exit 1, after
+  **4 min 14 s**, September 25 **19:13:16–19:17:30 EDT**. It completed all
+  **1,000 training updates** before the strict continuation gate failed.
+  Training, intermediate images, checkpoint and both JSON reports are preserved
+  at `outputs/identity-overfit-8712331/`; the whole job remains failed.
+
+| Fixed training-frame metric | Initial | Update 1,000 |
+| --- | ---: | ---: |
+| Total objective | 0.214360 | 0.060658 |
+| Whole-image PSNR | 17.3040 dB | 25.2698 dB |
+| Foreground PSNR | 8.4769 dB | 17.3258 dB |
+| LPIPS-Alex | 0.149462 | 0.040621 |
+| Silhouette IoU | 0.856749 | 0.954845 |
+
+- Visually inspected final RGB and target: clothing and walking pose are
+  recognizable, while the face/hat is heavily smeared and body surfaces have
+  streaking and incomplete detail. This is one bike training frame (`00001`),
+  four fixed training references, effective batch one and constant LR. It is
+  neither a held-out evaluation nor proof of a generalizable identity model.
+- Training-only peak PyTorch allocation was **8,345,967,104 bytes**; including
+  the second model/optimizer used by continuation, peak was **10,571,850,240
+  bytes**. Measured Python runtime was **242.82 s**. These measurements do not
+  establish the full effective-batch-16 training footprint.
+- Continuation had identical scalar loss, maximum parameter error
+  **9.795e-7**, and maximum RGB error **0.0291112**, above the unchanged 0.001
+  gate. Checkpoint SHA256:
+  `c41d70a93909c79d63f3d2f7fef0361a95ae8394d51cfb175de78971aa5bbb09`.
+- Ran the existing isolation diagnostic on this exact checkpoint as one-B200
+  **8718691**, which **completed in 41 s**, exit 0, on September 26. Model,
+  optimizer and RNG restore exactly; repeated pre-update RGB/means agree
+  exactly. Repeated updates in the *same instance* give RGB maximum error
+  **0.0268645**, mean **2.713e-5**, RMS **2.599e-4**. A fresh restored instance
+  gives maximum **0.0309402**, mean **2.638e-5**, RMS **2.348e-4**.
+- This reproduces the discrepancy without a serialization boundary: parameter
+  errors remain **6.86e-7 / 8.09e-7**, while gradients differ by up to
+  **7.63e-6**. Isolated rasterizer forwards agree exactly; repeated backward
+  passes differ by at most **1.863e-9** across the tested Gaussian fields.
+  This supports local CUDA update variability, not a broken restore. It does
+  not isolate every operator, prove long-run reproducibility or turn the
+  original pixel-tolerance failure into a pass. Report:
+  `outputs/identity-resume-1000-8718691.json`.
+
+### LHM++ assets, compiled attention and dependency audit
+
+- CPU **8713653 completed**, exit 0, **47 s**. The new geometry audit constructs
+  native `BaseSkinning` with the actual released configuration; neutral, male
+  and female SMPL-X forwards match standard smplx after the same FLAME
+  expression transfer with **zero FP32 vertex error** on the tested canonical
+  and nonzero inputs. The 100 transferred expression bases agree exactly.
+- Native subdivision gives **41,866 vertices / 83,656 faces**, with **2,176
+  expression vertices** and **264 constraint vertices**. All **160,000** query
+  points lie inside the `[1,55,128,128,128]` diffused volume. Raw queried weights
+  are finite/nonnegative and normalized within **3.58e-7**, without changing
+  the native interpolation or asset bytes. Report:
+  `outputs/lhmpp-geometry-8713653.json`. Full CUDA skinning and model execution
+  remain separate checks.
+- FlashAttention CPU build **8713527 completed**, exit 0, **32 min 7 s**, on
+  September 25. The resulting 2.8.2 wheel is **69,920,362 bytes**, SHA256
+  `923cf30d8ab6b8c2849b479c870bfb82849b7381f3474f371eacc5acebf3c963`.
+  Its source/compiler/ABI/sm_100 receipt is `build/flash-attn-8713527/build.json`.
+- On September 26, the interrupted install was confirmed not to have taken
+  effect. Rehashed the wheel, then installed it locally with `--no-index
+  --no-deps`. No package download, version-check bypass or main LUNA environment
+  modification occurred.
+- CPU dependency audit **8718696 completed**, exit 0, **61 s**. Both native LHM
+  and LHM++ modules import, CPU segment reduction matches expected values,
+  FlashAttention is selected in Sonata, and **all 106 prior baseline package
+  versions are unchanged**. Report: `outputs/lhmpp-dependencies-8718696.json`.
+  Wrote `requirements-lhmpp-resolved.txt`; reproducing compiled packages still
+  requires the source/build receipts, not just this version snapshot.
+
+### LHM checkpoint checker corrected; attention discrepancy under investigation
+
+- LHM **8713314 failed**, exit 1, **81 s**, September 25
+  **19:37:23–19:38:44 EDT**. Native construction succeeded with
+  **1,863,858,647 parameters**. All **721** supplied checkpoint keys had matching
+  shapes and no unexpected keys; missing state belonged exclusively to the
+  external frozen Sapiens/ArcFace modules. The raw-key-versus-loader-key assertion
+  then failed before exact tensor verification and GPU operator checks.
+- PyTorch's metadata-less legacy BatchNorm load preserves its existing batch
+  counter and does not report that counter as missing. Revised `smoke_lhm.py`
+  to account only for actual BatchNorm counters, record the loader's full key
+  report and require **every external frozen tensor to remain unchanged**.
+- The first constructor downloaded GFPGAN into its installed package cache,
+  ignoring runtime-v1's working-directory link. Rehashed the actual cached
+  copy: it matches the documented GFPGAN SHA256 exactly. The smoke now verifies
+  and records that package-cache path before native construction. A fresh
+  environment must populate that location from the verified bootstrap weight.
+- Follow-up one-B200 **8718699** passed construction and **exact loading of all
+  721 supplied tensors**. All **773 omitted external tensors remain unchanged**;
+  **30** are the legacy BatchNorm counters. This confirms the checker correction.
+  It subsequently failed the xformers-versus-Torch-SDPA attention comparison
+  (maximum difference **1.59375**, 94.4% of elements outside tolerance), so the
+  complete job still fails. GPU nearest-neighbor assertions were reached and
+  passed before this comparison. Report: `outputs/lhm-constructor-8718699/report.json`.
+- Submitted one-GPU **8718715** to compare default/explicit Torch and xformers
+  backends plus direct FlashAttention against an explicit FP32 matmul-softmax
+  reference. Neither optimized implementation is assumed correct based only on
+  their disagreement. Native avatar inference and baseline quality scoring are
+  pending this numerical gate.
+
+- Diagnostic **8718715 failed**, exit 1, **38 s**, as expected for the unresolved
+  default-backend error. Torch default/math/Flash/cuDNN and direct FlashAttention
+  match explicit FP32 attention in both BF16 and FP16. xformers default does
+  not (maximum errors **3.19076 / 3.19121**). The first explicit-xformers subtests
+  passed the wrong `op` argument form and only produced Python `TypeError`s;
+  those results are not GPU support failures.
+- Corrected that diagnostic API call and submitted **8718733**, five-minute
+  one-GPU limit. It records actual dispatch and additionally tests dispatch with
+  FA3 disabled. A transient indentation issue was fixed and Ruff passed while
+  the job was authoritatively still pending; no result from that edit is claimed.
+- Added the native LHM++ mode and its actual head-width/patch-size attention,
+  sparse-convolution, scatter and pointops gates to `smoke_lhm.py`. Queued
+  **8718751**, one B200 / 15 minutes, after diagnostic **8718733**. Its wrapper
+  checks the diagnostic evidence and unchanged package versions before running
+  both native baselines sequentially with FA3 disabled. It stops if the probe
+  does not validate this setting. These full-size model checks are not yet run.
+- At **04:30 EDT on September 26**, scheduler queries confirm **8718733** is
+  `PENDING (Priority)` and **8718751** is `PENDING (Dependency)`. Both live
+  submissions are preserved. Final static verification passes: Ruff, formatting
+  of changed Python checks, AST parsing of **57 Python files**, changed shell
+  syntax, local Markdown links and `git diff --check`. Core model numerics were
+  not changed by the baseline work; the latest full core CPU suite remains
+  the earlier **28 passed** result.
+
+## 2026-09-28: DNA-Rendering Part 1 inventory and quota-blocked acquisition
+
+- User supplied dataset-access approval and requested full Part 1 acquisition,
+  inspection and documentation. Data may not be redistributed. Created private
+  storage at project `data/dna_rendering/`, outside Git, and kept access details
+  and full file manifests there.
+- Recursively inventoried **162 Part 1 files plus two release support files**:
+  **246,646,018,479 advertised bytes (229.707 GiB)**. This includes 39 motion
+  RGB files, 39 annotations, 39 A-pose RGB files and 39 A-pose depth files, plus
+  ZIPs and metadata. Motion filenames cover 37 actor prefixes. About 404 GiB
+  was free at the initial check; full acquisition fits, but full feature caching
+  would not. No extraction or cache generation has been started.
+- Acquired and hashed the **7,269-byte README** and **1,133-byte A-pose mapping**.
+  Mapping checks cover all 39 motions and all listed A-pose RGB/depth files,
+  without unused entries. These are metadata checks, not raw image validation.
+- CPU job **8754401**, two CPUs, September 28 **23:45:10–23:45:21 EDT**, **11 s**,
+  **failed exit 1**: seven selected downloads returned Google Drive quota pages.
+  Together with initial probes, **12 distinct files failed with quota errors**,
+  **two completed**, and **150 remain unattempted**. Large-file confirmation
+  succeeded only in reaching another quota page. No SMC file was downloaded.
+- Added `scripts/acquire_dna.py`: external private inventory, exact byte counts,
+  local SHA256 receipts, HTML/error rejection, existing-file verification,
+  guarded HTTP resume and bounded quota failures. Real metadata downloads and
+  error handling ran; large-file transfer/resume and raw-data checks remain
+  unverified. Initial inventory validation incorrectly equated two Drive
+  metadata fields; removed that equality after the saved listings showed they
+  differ. Downloads validate the advertised file size against HTTP/actual bytes.
+- Reviewed the public DNA reader/integration at pinned commit
+  `a84cb31b934128fdfc1b324de3559909ffad39e2`, the release page, dataset paper,
+  LUNA's supervision requirements and the LHM++ benchmark gate. Documented
+  camera-to-world inversion, distortion, BGR/RGB, alpha polarity, actual reader
+  field names, body-scale uncertainty, differing example camera splits, and the
+  need to convert/refit SMPL-X to our chosen SMPL. No SMPL substitution or DNA
+  training was performed. Full notes: [DNA-Rendering](dna-rendering.md).
+- User asked how to enable downloading. Existing **rclone 1.75.1** had no remotes;
+  prepared a `dna` remote using `drive.readonly` and the Part 1 root, with private
+  configuration and no token. User OAuth remains required. Its shared-client
+  retirement warning was observed; successful authenticated downloads have not
+  been established. The HTTP downloader and rclone authentication are separate.
+- Ruff and syntax checks pass for the acquisition script. No new dependency,
+  GPU run or model-code change was needed for this source/metadata audit.
+
+## 2026-09-29: DNA loader and synthetic verification
+
+- Added independent lazy SMC reading, explicit camera/frame observation manifests,
+  per-process bounded HDF5 handles, matching RGB/alpha undistortion, calibrated
+  square crops, four-reference selection and dataset-factory integration with
+  training/feature extraction. Runtime camera checks reject altered manifest
+  intrinsics/extrinsics; actor and observation leakage checks guard custom splits.
+- Added a private per-sequence audit command covering all camera/frame keys,
+  RGB/mask/calibration coverage, source SHA256, body/keypoint schema and sampled
+  start/middle/end image payloads. No raw SMC has been audited yet. Synthetic
+  tests exercise a 60-camera fixture and detection of a missing mask frame.
+- Preserved SMPL as the teacher model. Training requires numeric SMPL sidecars,
+  matching source/asset hashes, matching pose-corrective convention and successful
+  conversion validation. No real SMPL-X-to-SMPL conversion is complete. Face
+  features explicitly label the upper-body crop fallback; cache generation has
+  a default 32 GiB per-kind selected-manifest budget and a free-space guard.
+- Added **h5py 3.16.0** only to the main environment, optional DNA dependency and
+  resolved lock; `pip check` passed. No Torch/NumPy upgrades or baseline-environment
+  changes. Tests use generated HDF5 fixtures without restricted release content.
+- CPU job **8754537**, September 29 **00:03:10–00:03:35 EDT**, completed exit 0:
+  **23 passed in 19.38 s** for initial DNA plus data/geometry/provenance checks.
+- CPU job **8754628**, **00:05:12–00:05:41 EDT**, completed exit 0:
+  full `pytest -m 'not gpu' -q`, **40 passed in 23.53 s**. One CPU-node NVML
+  warning; no GPU execution. This preceded the final camera-validation/audit edits.
+- CPU job **8754675**, **00:13:57–00:14:16 EDT**, completed exit 0:
+  final focused data/geometry/provenance suite **29 passed in 14.71 s**, including
+  **18 DNA cases**. This covers the additional manifest-mutation checks and file
+  auditor. Ruff passes for changed DNA modules/tests. No real DNA decoding,
+  feature extraction, model smoke test or training result is claimed.
+- Windows-local rclone OAuth succeeded after resolving an occupied local
+  callback port. Authenticated listing matches all **162 Part 1 files** by path,
+  ID and byte count, and supplies **162 MD5 checksums**. No token was printed.
+  First transfer job **8754682**, **00:17:10–00:17:14 EDT**, failed exit 1 during
+  source lookup: shared-client per-project API query rate limit, zero bytes.
+  This is distinct from the earlier anonymous file-quota responses. Dataset
+  transfer still requires all 164 inventoried files; synthetic verification
+  does not satisfy acquisition or raw-data acceptance.
+- Retry **8754685**, **00:18:36–00:18:39 EDT**, failed exit 7 with authenticated
+  annotation-file `downloadQuotaExceeded`. Job **8754693**, **00:19:36–00:19:40
+  EDT**, acquired the **10,042-byte sample-code ZIP**, then failed on its RGB
+  counterpart with the same file quota (overall exit 1). ZIP SHA256 and all five
+  member CRCs passed. Source review established global camera IDs 0–59, a
+  per-channel quadratic color-calibration helper, source depth /1000 conversion
+  and camera composition, and that the visualization ignores scale/expression.
+  These are source findings, not real-data geometry checks. The source remains
+  private, and its legacy installer was not executed.
+- Job **8754702**, **00:21:16–00:21:19 EDT**, failed exit 1: all four outstanding
+  small metadata/preview probes hit shared-client API request-rate limits.
+  Current private receipts show **3 complete / 164 (18,444 bytes)**, nine latest
+  file-quota errors, four latest API-rate errors, and 148 unattempted files.
+  OAuth is working; raw data is still absent. No transfer job remains running.
+- Follow-up **8754716**, **00:25:10–00:25:12 EDT**, failed exit 1 on the first
+  small-metadata request with the shared-client query rate limit, despite a
+  several-minute gap and one-transaction-per-second pacing. It stopped before
+  testing the alternative raw pair. No additional bytes were acquired.
+- User requested individual Part 1 downloads. Job **8754723**, **00:29:17–00:29:18
+  EDT**, failed exit 1 on a previously unattempted annotation file at the
+  shared-client API rate limit. One transfer, one stream and one API transaction
+  per second were configured. No other selected file was attempted and no data
+  transferred. Current counts: three complete, nine latest file-quota errors,
+  five latest API-rate errors, 147 unattempted. This does not prove the untested
+  files are individually quota-blocked.
+- User suggested gdown/authentication. Confirmed the rclone remote already has
+  an OAuth token and read-only scope, but no custom client ID. Installed
+  **gdown 6.4.0** into an isolated `envs/dna-download` environment. Job **8754809**,
+  **00:33:21–00:33:25 EDT**, failed exit 1 on one RGB SMC using the web download
+  route without cookies: Google explicitly returned its too-many-users message.
+  No browser-cookie authorization was available or tested. Main training
+  dependencies were unchanged. Latest counts: three complete, ten file-quota
+  failures, five API-rate failures and 146 unattempted.
+- User supplied a private Desktop OAuth client and completed renewed browser
+  authorization. Confirmed custom client, nonempty token, read-only scope,
+  unchanged Part 1 root and private configuration permissions. API listing
+  succeeded, matching all 162 file IDs, sizes and MD5 checksums. Job **8755502**,
+  **01:16:29–01:16:35 EDT**, failed exit 1: three individual file probes each
+  returned `downloadQuotaExceeded`, with no shared-client API error.
+- Added `scripts/download_dna_rclone.py` for the requested individual-file
+  acquisition: one transfer/stream, one API transaction per second, no automatic
+  retries, verified source metadata, local hash/format verification, atomic
+  receipts and acquisition lock. **8755563**, **01:19:36–01:23:12 EDT**, finished
+  its complete scan: three existing files reverified and **158 additional files
+  returned `downloadQuotaExceeded`**. It skipped the three immediately preceding
+  failed private-client probes. Combined coverage is all **164** inventory
+  entries: **3 complete, 161 file-quota failures, 0 unattempted**. No client-wide
+  API rate error occurred in the scan. Slurm correctly reports FAILED/exit 1
+  for incomplete acquisition. Ruff passes; real enumeration, checksum rechecks,
+  ZIP CRC and error receipts ran, while successful large-file transfer remains
+  unverified. No raw SMC, conversion or real-data training claim is made.
+
 ## Outstanding verification / required inputs
 
 1. The neutral SMPL requirement is satisfied; real-body geometry, overlay and
    teacher-gradient checks passed. Continuation state restoration is exact;
-   repeated CUDA updates have documented small numerical variability. Inspect
-   the pending real CLI training/resume smoke for full integration.
+   repeated CUDA updates have documented small numerical variability. The short
+   real CLI training/resume/evaluation smoke and checkpoint audit passed.
 2. SMPL, DINOv3 and all body/face/motion caches are ready. No additional core
    model asset input is currently needed.
-3. Tiny real-data overfit, full
-   training/resume, held-out metrics and exported avatar quality. Those training
-   and quality checks remain unverified; the intended-size synthetic GPU smoke
-   does not substitute for them.
-4. Native LHM/LHM++ runtime dependencies/body assets, SMPL-X conversion, and
-   baseline inference adapters remain unfinished; source/checkpoints/input
-   export/common evaluator are available. Do not report baseline scores yet.
-5. Predicted-trajectory temporal evaluation, larger datasets, multiview
-   refinement, DDP, alternative controls and hybrid-label ablations remain.
+3. Guarded RGB-input inference job 8712233 passed and its poor output was
+   inspected. The 1,000-update pilot learns recognizable fixed-target appearance
+   with visible artifacts; full development training, held-out generalization,
+   test-set model metrics and exported avatar quality remain unverified. The
+   eight-update CLI smoke and its validation metrics do not substitute for those
+   quality checks. Account for the measured global translation range limitation
+   when inspecting animator training.
+4. LHM dependencies, prior files, numeric FLAME and native expression consumers
+   are prepared/verified; native construction and exact checkpoint loading now
+   pass, but the GPU attention discrepancy must be resolved. LHM++ body/volume
+   and dependency checks pass; native model/GPU integration, SMPL-X conversion
+   and baseline inference adapters remain
+   unfinished. Source/checkpoints/selected prior files/input export/common
+   evaluator are available. The official transfer
+   correspondences have been requested from the user. Do not report baseline
+   scores yet.
+5. DNA-Rendering access is approved, but Part 1 bulk download, raw SMC inspection,
+   conversion and training remain pending the transfer blocker. MVHumanNet++,
+   predicted-trajectory temporal evaluation, multiview refinement, DDP,
+   alternative controls and hybrid-label ablations remain.

@@ -19,7 +19,7 @@ import torch.nn.functional as F
 import yaml
 from torch import nn
 
-from .data.neuman import NeuManDataset, frame_annotation
+from .data import dataset_from_manifest
 from .geometry import matrix_to_sincos
 from .losses import geometry_priors, projection_loss, rendering_losses, structural_loss
 from .metrics import aggregate_records, image_metrics
@@ -98,9 +98,9 @@ def prepare_item(item):
 def translation_statistics(teacher, data):
     values = []
     for scene, name in data.items:
-        annotation = frame_annotation(data.root / scene, data.lookup[scene][name])
+        annotation = data.frame_annotation(scene, data.lookup[scene][name])
         pose, betas, transform = [
-            torch.from_numpy(annotation[k])[None].cuda()
+            torch.from_numpy(annotation[k])[None].to(teacher.anchors.device)
             for k in ("pose", "betas", "body_to_camera")
         ]
         _, translation = teacher.global_motion(pose, betas, transform)
@@ -182,12 +182,27 @@ def main():
     ).cuda()
     model_config = ModelConfig(**cfg["model"])
     identity = IdentityEncoder(teacher.anchors, teacher.semantic_labels, model_config).cuda()
-    data = NeuManDataset(
-        cfg["data_root"], cfg["manifest"], size=cfg["image_size"], random_references=True
+    data = dataset_from_manifest(
+        cfg["data_root"],
+        cfg["manifest"],
+        size=cfg["image_size"],
+        random_references=True,
+        require_smpl=True,
+        verify=False,
     )
-    validation = NeuManDataset(
-        cfg["data_root"], cfg["manifest"], split=args.evaluate or "val", size=cfg["image_size"]
+    validation = dataset_from_manifest(
+        cfg["data_root"],
+        cfg["manifest"],
+        split=args.evaluate or "val",
+        size=cfg["image_size"],
+        require_smpl=True,
+        verify=False,
     )
+    if not len(data) or not len(validation):
+        raise ValueError("Training and requested evaluation splits must be nonempty")
+    if hasattr(data, "validate_smpl_asset"):
+        for dataset in (data, validation):
+            dataset.validate_smpl_asset(body_asset_hash, cfg.get("smpl_pose_blend_shapes", True))
     mean, std = translation_statistics(teacher, data)
     animator = NeuralAnimator(cfg["num_queries"], model_config, mean, std).cuda()
     kinds = ("body", "face") if args.stage == "identity" else ("body", "face", "motion")
@@ -263,7 +278,9 @@ def main():
         result.update(
             manifest_sha256=manifest_hash,
             checkpoint=str(args.resume),
-            protocol="seen-sequence, frame-held-out, annotated crops",
+            protocol=json.loads(Path(cfg["manifest"]).read_text()).get(
+                "protocol", "seen-sequence, frame-held-out, annotated crops"
+            ),
         )
         (output / f"{args.evaluate}-metrics.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result["mean_over_scenes"], indent=2))
@@ -272,6 +289,7 @@ def main():
         scene: [i for i, pair in enumerate(data.items) if pair[0] == scene]
         for scene in data.metadata
     }
+    by_scene = {scene: indices for scene, indices in by_scene.items() if indices}
     for update in range(start, stop):
         model.train()
         optimizer.zero_grad(set_to_none=True)

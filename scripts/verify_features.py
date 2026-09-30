@@ -39,7 +39,8 @@ def main():
             metadata["manifest_sha256"] != digest
             or metadata["kind"] != kind
             or metadata["asset"] != catalog[asset_keys[kind]]
-            or metadata["preprocessing_version"] != 1
+            or metadata["preprocessing_version"]
+            != (2 if manifest.get("dataset") == "dna_rendering" else 1)
             or metadata["dtype"] != "float16"
         ):
             raise ValueError(f"Cache metadata does not match the current protocol: {kind}")

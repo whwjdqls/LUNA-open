@@ -43,6 +43,14 @@ missing-training-fit/numerical-validation rejection and comparison mismatch
 rejection. The common CLI also imports successfully in PARCC's native baseline
 environment. This is an import check, not a GPU training result.
 
+Continuation audit: job **8772276** passed **9 focused tests in 9.58 s**. Native
+Gaussian scale bounds are plain Python attributes in upstream code and therefore
+absent from its state dict. The adapter now serializes the schedule update as
+extra state and restores it through `load_state_dict`, preserving fresh-process
+evaluation for nonconstant native curricula. The test executes the actual
+released tuner and scale-processing methods. The released LHM++ architecture
+JSON currently has equal start/end bounds, so that constant default is unchanged.
+
 Native full-size forward/backward/AdamW gates are submitted as **8772184**,
 one B200, sequential LHM++ then LHM. Its body motion/camera are synthetic;
 even a pass will establish trainability, not pose conversion or quality. The
@@ -104,6 +112,8 @@ The native models retain their released Gaussian scale-clipping curriculum
 through `hyper_step(update)`; LUNA retains its own Gaussian parameterization.
 These architecture-specific constraints are recorded in the native config
 and are not claims of identical internal model behavior.
+Native checkpoint extra state also records the last executed schedule update;
+loading a selected checkpoint restores its bounds before evaluation.
 
 LHM natively consumes one image. Its released forward selects `image[:,0]`.
 Silently passing four images would therefore give it less information than the

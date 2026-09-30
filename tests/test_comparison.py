@@ -173,3 +173,52 @@ def test_result_comparator_rejects_unequal_protocol_and_targets(tmp_path):
     paths[2].write_text(json.dumps(changed))
     with pytest.raises(ValueError, match="targets"):
         compare(paths)
+
+
+def test_native_scale_curriculum_survives_fresh_process_checkpoint(tmp_path):
+    from luna_open.native_baselines import NativeReconstruction
+    from luna_open.upstream_objective import load_class
+
+    source = Path("/vast/projects/lingjie6/impossible/jungbinc/references/LHM-plusplus")
+    if not source.exists():
+        pytest.skip("Pinned external LHM++ source unavailable")
+    tuner, _ = load_class(source / "core/models/utils.py", "LinerParameterTuner")
+    decoder, _ = load_class(
+        source / "core/models/rendering/gaussian_decoder/mlp_decoder.py",
+        "GSMLPDecoder",
+        {"hyper_step", "_process_scaling"},
+    )
+
+    class RendererFixture(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor(0.0))
+            self.gs_net = decoder()
+            self.gs_net.clip_scaling_pruner = tuner(0, 0.01, 0.05, 3000)
+            self.gs_net.scaling_activation = torch.exp
+
+        def hyper_step(self, update):
+            self.gs_net.hyper_step(update)
+
+        def forward(self):
+            return self.gs_net._process_scaling(self.weight)
+
+    def wrapper():
+        # Exercise the real adapter's serialization without constructing its
+        # full GPU model. Curriculum and scaling operations are upstream code.
+        model = NativeReconstruction.__new__(NativeReconstruction)
+        torch.nn.Module.__init__(model)
+        model.method = "lhmpp"
+        model.model = RendererFixture()
+        model.set_update(0)
+        return model
+
+    trained = wrapper()
+    trained.set_update(1500)
+    checkpoint = tmp_path / "native.pt"
+    torch.save(trained.state_dict(), checkpoint)
+    restored = wrapper()
+    assert restored.model().item() != trained.model().item()
+    restored.load_state_dict(torch.load(checkpoint, weights_only=False), strict=True)
+    assert restored.last_update == 1500
+    torch.testing.assert_close(restored.model(), trained.model(), rtol=0, atol=0)

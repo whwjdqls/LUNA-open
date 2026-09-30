@@ -134,6 +134,24 @@ class NativeReconstruction(nn.Module):
             training_policy="train all fresh reconstruction modules; freeze native pretrained image backbones",
             rendering="native renderer; explicit canvas size and unchanged crop K",
         )
+        self.set_update(0)
+
+    def set_update(self, update):
+        if type(update) is not int or update < 0:
+            raise ValueError("Native schedule update must be a nonnegative integer")
+        self.model.hyper_step(update)
+        self.last_update = update
+
+    def get_extra_state(self):
+        # Upstream clip_scaling is a Python float, absent from its state dict.
+        # Include its schedule position so fresh-process evaluation is identical
+        # to validation at the update that produced the checkpoint.
+        return dict(schema_version=1, method=self.method, last_update=self.last_update)
+
+    def set_extra_state(self, state):
+        if state.get("schema_version") != 1 or state.get("method") != self.method:
+            raise ValueError("Native training state has a different schema or method")
+        self.set_update(state["last_update"])
 
     def train(self, mode=True):
         super().train(mode)

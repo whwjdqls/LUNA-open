@@ -414,7 +414,7 @@ def main():
         for group in optimizer.param_groups:
             group["lr"] = rate
         if args.method != "luna":
-            model.model.hyper_step(update)
+            model.set_update(update)
         totals, samples = {}, []
         for microstep in range(contract["effective_batch"]):
             choice = corpus.sampler.sample(update, microstep)

@@ -1,6 +1,7 @@
 """Rasterize each SMPL-X UV island at its anatomical sampling density."""
 
 import json
+import math
 
 import numpy as np
 import torch
@@ -53,10 +54,13 @@ class UVIsland(nn.Module):
 class AdaptiveAtlas(Atlas):
     """Adaptive Gaussian anchors with a uniform atlas preview for display."""
 
-    def __init__(self, uv, uv_faces, mesh_faces, size, segmentation):
+    def __init__(self, uv, uv_faces, mesh_faces, size, segmentation, body_scale=2.0):
         nn.Module.__init__(self)
         if size < 2 or size % 2 or uv_faces.shape != mesh_faces.shape:
             raise ValueError('Adaptive atlas requires an even resolution and matching UV/mesh face order')
+        body_resolution = size * body_scale
+        if not math.isfinite(body_resolution) or round(body_resolution) < 1:
+            raise ValueError('The adaptive body scale must produce a positive finite resolution')
         self.size = size
         self.islands = nn.ModuleList()
         self.island_stats = []
@@ -69,8 +73,8 @@ class AdaptiveAtlas(Atlas):
         for component in np.unique(components):
             faces = np.flatnonzero(components == component)
             region = island_region(mesh_faces[faces], uv[uv_faces[faces]], segmentation)
-            scale = {'hands': 0.5, 'head': 1.0, 'body': 2.0}[region]
-            resolution = int(size * scale)
+            scale = {'hands': 0.5, 'head': 1.0, 'body': body_scale}[region]
+            resolution = round(size * scale)
             coords = uv[uv_faces[faces].reshape(-1)] * [resolution, -resolution] + [0, resolution]
             left, top = np.maximum(np.floor(coords.min(axis=0)).astype(int), 0)
             right, bottom = np.minimum(np.ceil(coords.max(axis=0)).astype(int), resolution)
@@ -106,10 +110,10 @@ class AdaptiveAtlas(Atlas):
         self.register_buffer('valid', torch.from_numpy(display >= 0))
 
     @classmethod
-    def from_smplx(cls, asset, size, segmentation):
+    def from_smplx(cls, asset, size, segmentation, body_scale=2.0):
         regions = json.loads(segmentation.read_text())
         with np.load(asset, allow_pickle=False) as data:
-            return cls(data['vt'], data['ft'], data['f'], size, regions)
+            return cls(data['vt'], data['ft'], data['f'], size, regions, body_scale=body_scale)
 
     def to_map(self, values):
         preview = values[..., self.preview_indices.clamp_min(0), :]

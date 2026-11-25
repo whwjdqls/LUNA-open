@@ -142,6 +142,10 @@ Each point keeps its own triangle, barycentrics, and scale prior based on the
 local sampling density. The preview maps these samples to the 528² layout
 for display.
 
+Pass `--adaptive-body-scale 1.2` for a 265,936-Gaussian variant on the same
+atlas. Body, limb, and foot islands use a 634-pixel lattice. The head keeps
+its 528-pixel lattice and the hands keep their 264-pixel lattice.
+
 The decoder samples a coarse feature patch per island from the projected
 16² Wan query grid. An island embedding distinguishes charts that overlap
 in UV space. A shared CNN independently processes each chart with three

@@ -73,9 +73,10 @@ class Experiment:
         self.asset = Path(cfg['assets']['smplx'])
         self.body = VertexSMPLX(self.asset, cfg['assets']['segmentation']).cuda()
         adaptive = getattr(args, 'adaptive_decoder', False)
+        body_scale = getattr(args, 'adaptive_body_scale', 2.0)
         segmentation = Path(cfg['assets']['segmentation'])
         if adaptive:
-            self.atlas = AdaptiveAtlas.from_smplx(self.asset, args.atlas_size, segmentation).cuda()
+            self.atlas = AdaptiveAtlas.from_smplx(self.asset, args.atlas_size, segmentation, body_scale).cuda()
         else:
             self.atlas = Atlas.from_smplx(self.asset, args.atlas_size).cuda()
         self.bind_pose = torch.zeros_like(self.body.canonical_pose)
@@ -102,6 +103,8 @@ class Experiment:
         if adaptive:
             self.provenance.update(adaptive_decoder=True, islands=self.atlas.island_stats,
                                    segmentation_sha256=file_sha256(segmentation))
+            if body_scale != 2.0:
+                self.provenance['adaptive_body_scale'] = body_scale
 
     @torch.no_grad()
     def load_outfit(self, split, outfit, reference, stamps, observations):
@@ -269,7 +272,10 @@ def train(args):
         decoder_fork = args.adaptive_decoder and not parent_adaptive
         if parent_adaptive and not args.adaptive_decoder:
             raise ValueError('Adaptive checkpoints require --adaptive-decoder')
-        if (parent_atlas != args.atlas_size or decoder_fork) and not args.allow_atlas_change:
+        body_scale_changed = parent_adaptive and (
+            parent['provenance'].get('adaptive_body_scale', 2.0) != args.adaptive_body_scale
+        )
+        if (parent_atlas != args.atlas_size or decoder_fork or body_scale_changed) and not args.allow_atlas_change:
             raise ValueError('Pass --allow-atlas-change to fork the spatially shared decoder at a new density')
         fork_step = parent['step']
         experiment.provenance['parent_checkpoint'] = dict(path=str(args.fork_checkpoint), step=fork_step,
@@ -303,6 +309,8 @@ def train(args):
     atomic_json(id_path, {'id': id_})
     name = ('wan22-ti2v-5b-arg-smplx-adaptive-islands' if args.adaptive_decoder
             else 'wan22-ti2v-5b-arg-smplx-uv-rgb-ssim-mask')
+    if args.adaptive_decoder and args.adaptive_body_scale != 2.0:
+        name += f'-body-{args.adaptive_body_scale:g}x'
     tracker = wandb.init(entity=args.entity, project=project, id=id_, resume='allow', mode='online',
                          name=name, config=experiment.provenance,
                          dir=str(args.output))
@@ -371,10 +379,14 @@ def main():
     parser.add_argument('--fork-checkpoint', type=Path)
     parser.add_argument('--allow-atlas-change', action='store_true')
     parser.add_argument('--adaptive-decoder', action='store_true')
+    parser.add_argument('--adaptive-body-scale', type=float, default=2.0,
+                        help='UV sampling multiplier for body, limb, and foot islands')
     for key, default in (('rgb-weight', 0.8), ('lpips-weight', 1.0), ('ssim-weight', 0.2), ('mask-weight', 0.5)):
         parser.add_argument(f'--{key}', type=float, default=default)
     parser.add_argument('--entity', required=True)
     args = parser.parse_args()
+    if args.adaptive_body_scale != 2.0 and not args.adaptive_decoder:
+        parser.error('--adaptive-body-scale requires --adaptive-decoder')
     if not os.getenv('SLURM_JOB_ID') or torch.cuda.device_count() != 1:
         raise RuntimeError('Run inside a Slurm step with one visible GPU')
     train(args)

@@ -1,0 +1,57 @@
+schema_version: 1
+architecture: lunav2_identity_v1
+seed: 2026
+work: /vast/projects/lingjie6/impossible/jungbinc
+output: /vast/projects/lingjie6/impossible/jungbinc/outputs/lunav2-identity-20261015-v1
+protocol: /vast/projects/lingjie6/impossible_1/jungbinc/experiments/frozen-lhm-projection10-scratch-v1/protocol.validated.json
+assets:
+  smplx: /vast/projects/lingjie6/impossible/jungbinc/assets/lhm_prior_official/pretrained_models/human_model_files/smplx/SMPLX_NEUTRAL.npz
+  segmentation: /vast/projects/lingjie6/impossible/jungbinc/assets/lunav2/smplx_vert_segmentation.json
+  detector: /vast/projects/lingjie6/impossible/jungbinc/assets/lunav2/pretrained_models/gagatracker/vgghead/vgg_heads_l.trcd
+  sapiens_checkpoint: /vast/projects/lingjie6/impossible/jungbinc/assets/sapiens2-pretrain-1b/sapiens2_1b_pretrain.safetensors
+  sapiens_source: /vast/projects/lingjie6/impossible/jungbinc/references/sapiens2
+  lhm_source: /vast/projects/lingjie6/impossible/jungbinc/references/LHM
+model:
+  width: 1024
+  feature_dim: 1536
+  aggregator_depth: 3
+  aggregator_heads: 8
+  mm_depth: 5
+  mm_heads: 16
+  gradient_checkpointing: true
+  input_size: [1024, 768]
+  render_size: [848, 512]
+  feature_chunk: 8
+  feature_cache_gib: 0
+training:
+  updates: 20000
+  learning_rate: 0.00004
+  warmup: 3000
+  weight_decay: 0.0005
+  betas: [0.9, 0.95]
+  gradient_clip: 0.1
+  outfits_per_gpu: 4
+  target_frames: 4
+  target_cameras: 4
+  gradient_accumulation_steps: 1
+  checkpoint_every: 100
+  validate_every: 500
+  keep_recent_checkpoints: 2
+loss:
+  rgb: 1.0
+  mask: 1.0
+  lpips: 1.0
+  face_identity: 0.0
+  asap: 10.0
+  acap: 1000.0
+  asap_ratio: 5.0
+  acap_distance: 0.05625
+  asap_groups: {head: 1.0, lower_body: 100.0, upper_body: 1000.0, hands: 10000.0}
+validation:
+  reference_counts: [1, 4]
+  target_cameras: [2, 6, 10, 14]
+  preview_outfits: 4
+logging:
+  wandb_project: luna-identity
+  wandb_name: lunav2-scratch-10475-lr4e-5
+  website: https://luna-motion-viewer-jungbin.niftyjoy9.chatgpt.site

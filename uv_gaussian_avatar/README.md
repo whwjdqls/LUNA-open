@@ -1,0 +1,165 @@
+# SMPL-X UV Gaussian fitting
+
+This experiment fits a single shared canonical Gaussian avatar to a calibrated
+multiview video. Each valid UV texel identifies a triangle and barycentric
+weights on SMPL-X. The corresponding Gaussian stores a center offset in metres,
+a unit `wxyz` quaternion, three log-scales, an opacity logit, and RGB.
+
+For each supplied pose, the SMPL-X mesh provides the posed anchor and per-vertex
+blended linear transforms. Following ARG-Avatar Appendix C, the code converts
+those linear transforms to vertex quaternions, chooses a common scalar sign, and
+barycentrically blends and normalizes them. The interpolated rotation carries
+the offset into the posed frame and composes with the canonical orientation.
+This port also normalizes the per-vertex quaternions during conversion.
+`PoseDelta` can adjust the canonical offset, rotation, and scale before this
+step. The density experiment uses the canonical fields alone, with supplied
+SMPL-X articulation and expression.
+
+## Run on PARCC
+
+Run in a one-GPU Slurm step from the repository root. The installed Python
+environment needs PyTorch, SMPL-X, gsplat, NumPy, OpenCV, Pillow, and FFmpeg on
+`PATH` or the `imageio_ffmpeg` Python package. The capture and licensed SMPL-X
+files live outside Git.
+
+```bash
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+protocol=/vast/projects/lingjie6/impossible_1/jungbinc/experiments/frozen-lhm-v21-front-nonloose-20261020-v1/protocol.validated.json
+asset="$LUNA_WORK/assets/lhm_prior_official/pretrained_models/human_model_files/smplx/SMPLX_NEUTRAL.npz"
+segmentation="$LUNA_WORK/assets/lunav2/smplx_vert_segmentation.json"
+extension="$LUNA_WORK/cache/comparison-extensions-lhm-sm100/gsplat_cuda"
+
+"$LUNA_PYTHON" -m uv_gaussian_avatar.fit \
+  --protocol "$protocol" --asset "$asset" --segmentation "$segmentation" \
+  --cuda-extension "$extension" --outfit 203381 --atlas-size 256 \
+  --output "$RUN_ROOT/fit-256"
+```
+
+Repeat with atlas sizes `384`, `528`, and `600`, and distinct output paths to
+reproduce the density comparison. `LUNA_WORK` and `LUNA_PYTHON` are available
+from `scripts/parcc_env.sh`. Set `RUN_ROOT` to a project-storage directory. Omit
+`--cuda-extension` if the current gsplat installation can load its own backend.
+
+```bash
+"$LUNA_PYTHON" -m uv_gaussian_avatar.compare \
+  --output "$RUN_ROOT/comparison" "$RUN_ROOT"/fit-{256,384,528,600}
+
+"$LUNA_PYTHON" -m uv_gaussian_avatar.replay \
+  --protocol "$protocol" --asset "$asset" --segmentation "$segmentation" \
+  --cuda-extension "$extension" --output "$RUN_ROOT/replay" \
+  "$RUN_ROOT"/fit-{256,384,528,600}
+```
+
+## Outputs
+
+Each fit saves `canonical_uv.npz`, `avatar.pt`, metrics per camera and time, an
+atlas panel, a canonical orbit panel, a posed checkerboard, and captured-versus-
+fitted video from the three held-out cameras. The NPZ contains the validity mask,
+texel bindings in row-major valid-texel order, canonical anchors, fit shape and
+bind pose, and the five dense Gaussian fields. The comparison checks source
+and capture equality across the runs. Replay reloads each checkpoint and
+checks the saved atlas and one jointly held-out frame across all three cameras.
+
+The fit uses cameras 00, 02, 04, 06, 08, 10, 12, and 14 at 37 timestamps.
+Cameras 01, 07, and 13 and 12 interleaved timestamps are held out of optimization.
+All four runs use 1,800 matched optimizer updates and a 416 × 320 pixel render.
+The displayed playback uses 49 ordered sampled timestamps at 8 fps.
+
+## Single-image prediction with Wan2.2
+
+The frozen Wan2.2-TI2V-5B VAE encodes one RGB image as one latent frame. The
+frozen patch embedding makes a 16 × 16 image-token grid from a padded 512 px
+reference. A learned projection lifts a separate 16 × 16 grid of UV queries into
+the same token width. The grids share Wan's self-attention, with separate
+temporal RoPE coordinates. The cross-attention context is a learned projection
+of the image tokens. The image uses timestep 0 and the UV queries use a fixed
+timestep 500. These timesteps condition one forward pass through all blocks.
+There is no noise sampling, scheduler, text encoding, or pixel-video decoding.
+
+Rank-8 LoRA adapts Q, K, V, and output projections in self- and cross-attention,
+plus both FFN linear layers, in every block. The new UV head upsamples the query
+output and predicts the same five Gaussian fields as the fitted atlas. Scales
+use a fixed neutral-template prior and a learned residual. SMPL-X subject shape
+and target poses are used when placing and rendering the predicted Gaussians.
+They do not enter the image-to-attributes network. The full trainer uses
+foreground-masked, full-canvas RGB L1 (0.8), VGG LPIPS (1.0), full-crop
+1 − SSIM (0.2), and alpha L1 (0.5). The small diagnostic CLI below uses the
+RGB L1 and VGG LPIPS terms of the configured LHM reconstruction objective.
+
+```bash
+"$LUNA_PYTHON" -m uv_gaussian_avatar.train_wan \
+  --wan-source "$LUNA_WORK/references/Wan2.2-20261028" \
+  --wan-checkpoint "$LUNA_WORK/assets/wan22-ti2v-5b-20261028" \
+  --wan-deps "$LUNA_WORK/envs/wan22-20261028/lib/python3.11/site-packages" \
+  --protocol "$protocol" --asset "$asset" --segmentation "$segmentation" \
+  --cuda-extension "$extension" --output "$RUN_ROOT/wan-uv"
+```
+
+`trainable.pt` contains only the LoRA weights, UV queries, and new projection
+layers. Use `WanUVAvatar.load_trainable_state` with the same Wan weights, atlas,
+neutral scale prior, query grid and rank, then call `predict_image` with an RGB
+tensor. The pilot exports predicted maps and held-out render panels for each
+outfit, with metrics in `metrics.json`.
+
+For training on the full MVHumanNet++ protocol, use the original LHM
+reimplementation's configuration and its prepared camera and validation
+reference selections. Set `TORCH_HOME="$LUNA_WORK/cache/torch"` to use the
+existing VGG and AlexNet weights. The W&B destination must be private for the
+captured validation images.
+
+```bash
+"$LUNA_PYTHON" -m uv_gaussian_avatar.train_wan_mvh \
+  --config configs/lunav2_identity.yaml --entity jungbinc-upenn \
+  --wan-source "$LUNA_WORK/references/Wan2.2-20261028" \
+  --wan-checkpoint "$LUNA_WORK/assets/wan22-ti2v-5b-20261028" \
+  --wan-deps "$LUNA_WORK/envs/wan22-20261028/lib/python3.11/site-packages" \
+  --atlas-size 528 --cuda-extension "$extension" --output "$RUN_ROOT/wan-uv-mvh"
+```
+
+The optimizer schedule, resolution, and target sampler come from the identity
+configuration. Four outfits contribute equally to one optimizer update with
+64 rendered targets and one reference per outfit. Each outfit graph is released
+after its gradients have been accumulated. The four-outfit previews at steps
+1, 10, and 25 are separate from the full validation at step 50 and every 500
+steps thereafter. Full validation uses the established 666-outfit split and
+reports macro-averaged PSNR, L1, SSIM, IoU, and LPIPS-Alex to W&B. Restart with
+the same output directory to resume from the last saved optimizer state.
+
+The four-term run forks from the RGB-only run's update-47 checkpoint via
+`--fork-checkpoint`, `--allow-atlas-change`, and `--first-validation 55`.
+The 528 × 528 atlas has 203,737 valid texels. The warmup, sampler, optimizer
+state, and shared decoder weights carry over from the 256 × 256 atlas. This run
+tracks the new density and objective in a separate W&B run.
+
+## Adaptive UV decoder
+
+Pass `--adaptive-decoder --atlas-size 528` to the production trainer. The SMPL-X
+UV mesh is split into connected islands. Each island is assigned by UV-area
+weighted anatomical coverage and rasterized at its own scale. The head uses
+1×, the hands use 0.5×, and the body, limbs, and feet use 2×. The neutral
+SMPL-X asset used for MVHumanNet++ produces 14 islands and 639,528 Gaussians.
+Each point keeps its own triangle, barycentrics, and scale prior based on the
+local sampling density. The preview maps these samples to the 528² layout
+for display.
+
+The decoder samples a coarse feature patch per island from the projected
+16² Wan query grid. An island embedding distinguishes charts that overlap
+in UV space. A shared CNN independently processes each chart with three
+residual blocks at 256, 128, and 64 channels. Each block is followed by 2×
+bilinear upsampling and a learned convolution. This produces 8× spatial
+upsampling, after which a 1×1 convolution predicts 14 residual attributes
+and the valid sample indices are gathered. The original uniform decoder
+provides the initial attribute field, sampled at the new texel centers.
+
+To fork an existing uniform run, pass `--fork-checkpoint /path/to/step.pt`
+and `--allow-atlas-change` with the adaptive settings. Use a separate output
+directory and keep the parent checkpoint available for resume. The parent
+weights and AdamW moments are restored by parameter name. The new per-island
+CNN and embedding start with fresh optimizer state.
+
+[ARG-Avatar, Appendix B](https://arxiv.org/pdf/2611.22207v1#page=14) ·
+[ARG-Avatar, Appendix E](https://arxiv.org/pdf/2611.22207v1#page=17)
+
+[ARG-Avatar, Appendix C](https://arxiv.org/pdf/2611.22207#page=14)
+
+[Wan2.2](https://github.com/Wan-Video/Wan2.2)

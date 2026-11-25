@@ -161,6 +161,141 @@ directory and keep the parent checkpoint available for resume. The parent
 weights and AdamW moments are restored by parameter name. The new per-island
 CNN and embedding start with fresh optimizer state.
 
+## Native island-wise UV tokens
+
+Use `--uv-representation native-islands --uv-patch-size 16 --image-side 16
+--atlas-size 528 --adaptive-body-scale 1.2` with either Wan trainer. This keeps
+the same 265,936 Gaussian anchors as the `1.2` adaptive decoder. Each island's
+rectangular raster bounds are padded on the bottom and right to multiples of
+the patch size. One trainable 256-dimensional query represents each patch
+that contains a Gaussian. Patches and texels are packed in row-major order
+within each island, and the final gather preserves the atlas's Gaussian order.
+
+The reference image and UV queries pass jointly through the 30 pretrained Wan
+blocks. The query input adds a learned island embedding and a linear embedding
+of the patch's global and chart-local UV centroids. `--canonical-3d-pos` also
+adds a zero-initialized linear projection of the patch's mean neutral SMPL-X
+anchor. The 3D inputs are centered on the neutral template's bounding box and
+divided by its longest half-extent. Both variants start from the same pretrained
+Wan and freshly initialized trainable weights. A run can resume from its own
+checkpoints. Checkpoint forks are rejected for this representation.
+
+Wan rotates the normalized self-attention Q and K using explicit positions.
+Image positions use the original `(0, row, col)` table entries. A UV patch
+with global centroid `(u, v)` uses `(1, (1-v)×15, u×15)` at `--image-side 16`.
+The fractional spatial positions use Wan's original angular frequencies and
+share the image lattice's spatial extent. Patches from different charts can
+share rotary phases. Each has its own trainable query and island embedding.
+Cross-attention still uses the 256 reference image tokens. Image and UV
+timesteps are 0 and 500, respectively.
+
+### Tensor sizes at 16×16 texels per patch
+
+| Stage | Shape |
+| --- | --- |
+| Padded and resized reference | `[B, 3, 512, 512]` |
+| Frozen Wan VAE | `[B, 48, 1, 32, 32]` |
+| Image patch embeddings and cross-attention context | `[B, 256, 3072]` each |
+| Global and local UV centroids, optional neutral 3D centroids | `[1253, 4]`, `[1253, 3]` |
+| Learned UV queries and projected UV queries | `[1253, 256]` and `[B, 1253, 3072]` |
+| Joint Wan input and output | `[B, 1509, 3072]` |
+| Wan self-attention Q, K, V | `[B, 1509, 24, 128]` each |
+| Per-token rotary phases shared by all heads | `[1509, 64]` complex |
+| Time modulation, shared across the batch | `[1, 1509, 6, 3072]` |
+| Normalized UV output and decoder projection | `[B, 1253, 3072]` and `[B, 1253, 256]` |
+| Scattered chart `i` with coarse height `hᵢ` and width `wᵢ` | `[B, 256, hᵢ, wᵢ]` |
+| Four shared residual upsampling stages | `[B, 256, 2hᵢ, 2wᵢ]` → `[B, 128, 4hᵢ, 4wᵢ]` → `[B, 64, 8hᵢ, 8wᵢ]` → `[B, 32, 16hᵢ, 16wᵢ]` |
+| Dense chart attributes and gathered Gaussians | `[B, 14, 16hᵢ, 16wᵢ]` and `[B, 265936, 14]` |
+
+The decoder fills empty coarse slots with zeros and runs the same CNN on
+each island separately. After the last upsampling block, GroupNorm, SiLU,
+and a 1×1 convolution give the 14 existing attributes. Gaussian activation,
+scale priors, shape, animation, rendering, dataset, and losses use the existing
+paths. The decoder's spatial upsampling factor follows the patch size.
+
+### Neutral SMPL-X chart inventory
+
+The rasterization resolution is the side of the UV lattice before extracting
+the chart bounds. The overview figure numbers charts by UV area. The IDs below
+follow token order. Utilization is the percentage of coarse slots kept in Wan.
+
+| Island | Region (figure label) | Raster | Bounds H×W | Padded H×W | Coarse H×W | UV tokens | Empty patches | Gaussians | Utilization |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | Head (2) | 528 | 223×279 | 224×288 | 14×18 | 224 | 28 | 48,768 | 88.9% |
+| 1 | Leg (3) | 634 | 245×158 | 256×160 | 16×10 | 115 | 45 | 23,783 | 71.9% |
+| 2 | Torso (1) | 634 | 359×389 | 368×400 | 23×25 | 490 | 85 | 110,925 | 85.2% |
+| 3 | Arm (5) | 634 | 212×140 | 224×144 | 14×9 | 101 | 25 | 20,714 | 80.2% |
+| 4 | Hand (9) | 264 | 31×49 | 32×64 | 2×4 | 7 | 1 | 806 | 87.5% |
+| 5 | Leg (4) | 634 | 245×160 | 256×160 | 16×10 | 113 | 47 | 23,773 | 70.6% |
+| 6 | Foot (7) | 634 | 81×107 | 96×112 | 6×7 | 31 | 11 | 5,329 | 73.8% |
+| 7 | Arm (6) | 634 | 209×138 | 224×144 | 14×9 | 99 | 27 | 20,686 | 78.6% |
+| 8 | Hand (10) | 264 | 31×49 | 32×64 | 2×4 | 7 | 1 | 805 | 87.5% |
+| 9 | Foot (8) | 634 | 78×104 | 80×112 | 5×7 | 32 | 3 | 5,317 | 91.4% |
+| 10 | Eye (12) | 528 | 44×44 | 48×48 | 3×3 | 9 | 0 | 1,429 | 100.0% |
+| 11 | Eye (14) | 528 | 38×38 | 48×48 | 3×3 | 8 | 1 | 1,083 | 88.9% |
+| 12 | Eye (11) | 528 | 44×44 | 48×48 | 3×3 | 9 | 0 | 1,431 | 100.0% |
+| 13 | Eye (13) | 528 | 38×39 | 48×48 | 3×3 | 8 | 1 | 1,087 | 88.9% |
+| **Total** | | | | | | **1,253** | **275** | **265,936** | **82.0%** |
+
+The joint sequence grows from 512 to 1,509 tokens. Self-attention uses
+2,277,081 query–key pairs per head and layer, up from 262,144 (8.69×).
+Cross-attention uses 386,304 pairs, up from 131,072 (2.95×). These are
+attention pair counts. Runtime also includes the projections, CNN, renderer,
+and data pipeline.
+
+Rebinning the same Gaussian samples into 8×8 patches yields 4,619 UV tokens
+and a joint sequence of 4,875 tokens. That grid would use 10.44× the
+self-attention pairs of the 16×16 native baseline. The 8×8 decoder is covered
+by unit tests. Its full Wan and rendering path is outside this run.
+
+| Variant | Trainable parameters | Change from legacy adaptive |
+| --- | ---: | ---: |
+| Global grid and adaptive residual decoder | 33,681,212 | — |
+| C · Native island queries and 2D positions | 34,097,614 | +416,402 |
+| D · Native island queries with canonical 3D positions | 34,098,382 | +417,170 |
+
+Both native runs have 320,768 trainable query values, 3,377,870 decoder
+parameters, and 20,152,320 LoRA parameters across 300 adapted projections.
+The optional 3D projection adds 768 parameters.
+
+### Verify and launch
+
+Run `python -m pytest -q tests/test_wan_native_uv.py` for small geometry,
+decoder, CLI, and RoPE tests. Run `uv_gaussian_avatar.verify_native_uv` with the
+same arguments as the MVHumanNet++ trainer, a fresh `--output`, and
+`--legacy-anchor-receipt` pointing to the previous adaptive atlas's inventory
+and anchor hashes. It writes `native-uv-islands.json`, `native-uv-layout.npz`,
+`native-uv-patches.png`, `native-uv-attributes.png`, and `verification.json`.
+The check uses pretrained Wan and runs four optimizer updates on the same real
+multiview batch at the configured peak LR of `4e-5`. The decoded attribute map
+is made after those updates. Both variants covered 64 training renders per
+update, peaked at 33.9 GiB allocated on B200, and reduced the repeated-batch
+objective from 0.33701 to 0.33556. Both passed the geometry and gradient checks.
+The full trainer uses its configured 3,000-update warmup.
+
+To start an independent run, use one of the following commands from a
+one-GPU Slurm step. Set `RUN_ROOT` to a new location for these outputs.
+
+```bash
+native=(
+  --config configs/lunav2_identity.yaml --entity jungbinc-upenn
+  --wan-source "$LUNA_WORK/references/Wan2.2-20261028"
+  --wan-checkpoint "$LUNA_WORK/assets/wan22-ti2v-5b-20261028"
+  --wan-deps "$LUNA_WORK/envs/wan22-20261028/lib/python3.11/site-packages"
+  --cuda-extension "$extension" --uv-representation native-islands
+  --uv-patch-size 16 --image-side 16 --atlas-size 528 --adaptive-body-scale 1.2
+)
+
+# C, with 2D positions
+"$LUNA_PYTHON" -m uv_gaussian_avatar.train_wan_mvh "${native[@]}" --output "$RUN_ROOT/native-c"
+
+# D, with 2D and canonical 3D positions
+"$LUNA_PYTHON" -m uv_gaussian_avatar.train_wan_mvh "${native[@]}" --canonical-3d-pos --output "$RUN_ROOT/native-d"
+```
+
+The experiment's launcher records the Slurm and training commands under
+`/ceph/projects/lingjie6/impossible/jungbinc/experiments/wan-uv-native-20261125-v1/launch.sh`.
+
 [ARG-Avatar, Appendix B](https://arxiv.org/pdf/2611.22207v1#page=14) ·
 [ARG-Avatar, Appendix E](https://arxiv.org/pdf/2611.22207v1#page=17)
 

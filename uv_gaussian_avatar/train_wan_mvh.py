@@ -37,6 +37,7 @@ from luna_open.provenance import file_sha256
 
 from .adaptive_atlas import AdaptiveAtlas
 from .fit import estimate_scales, load_rasterizer, render, stack_views, vertex_transforms
+from .native_islands import NativeUVLayout, add_uv_arguments, resolve_uv_arguments
 from .representation import Atlas, PosedSurface
 from .train_wan import check_gradients
 from .visualize import as_rgb, panel
@@ -72,6 +73,7 @@ class Experiment:
         self.pool = ThreadPoolExecutor(max_workers=12)
         self.asset = Path(cfg['assets']['smplx'])
         self.body = VertexSMPLX(self.asset, cfg['assets']['segmentation']).cuda()
+        native = getattr(args, 'uv_representation', 'legacy') == 'native-islands'
         adaptive = getattr(args, 'adaptive_decoder', False)
         body_scale = getattr(args, 'adaptive_body_scale', 2.0)
         segmentation = Path(cfg['assets']['segmentation'])
@@ -83,9 +85,12 @@ class Experiment:
         neutral, _ = self.body.mesh(self.bind_pose, self.body.anchors.new_zeros((1, 10)),
                                     self.body.anchors.new_zeros((1, 10)))
         base_scale = estimate_scales(self.asset, self.atlas, neutral[0])
+        layout = NativeUVLayout(self.atlas, neutral[0], args.uv_patch_size) if native else None
         backbone, vae, embedding = load_wan(args.wan_source, args.wan_checkpoint, args.wan_deps)
         self.model = WanUVAvatar(backbone, vae, embedding, self.atlas, base_scale.log(),
-                                 side=args.query_side, rank=args.rank).cuda()
+                                 side=args.query_side, rank=args.rank,
+                                 image_side=getattr(args, 'image_side', None), native_layout=layout,
+                                 canonical_3d_pos=getattr(args, 'canonical_3d_pos', False)).cuda()
         self.perceptual = build_identity_train_perceptual()
         self.eval_perceptual = build_lpips()
         self.provenance = dict(config_sha256=file_sha256(args.config), protocol_sha256=protocol_hash,
@@ -105,6 +110,13 @@ class Experiment:
                                    segmentation_sha256=file_sha256(segmentation))
             if body_scale != 2.0:
                 self.provenance['adaptive_body_scale'] = body_scale
+        if native:
+            self.provenance.update(
+                uv_representation='native-islands', uv_patch_size=layout.patch_size,
+                image_side=self.model.image_side, image_tokens=self.model.image_side**2,
+                uv_tokens=layout.num_tokens, canonical_3d_pos=args.canonical_3d_pos,
+                native_layout=layout.stats, rope='wan-t1-fractional-global-uv-scaled-to-image-side-minus-one',
+            )
 
     @torch.no_grad()
     def load_outfit(self, split, outfit, reference, stamps, observations):
@@ -311,6 +323,10 @@ def train(args):
             else 'wan22-ti2v-5b-arg-smplx-uv-rgb-ssim-mask')
     if args.adaptive_decoder and args.adaptive_body_scale != 2.0:
         name += f'-body-{args.adaptive_body_scale:g}x'
+    if args.uv_representation == 'native-islands':
+        name = f'wan22-ti2v-5b-native-uv-patch{args.uv_patch_size}'
+        if args.canonical_3d_pos:
+            name += '-canonical-xyz'
     tracker = wandb.init(entity=args.entity, project=project, id=id_, resume='allow', mode='online',
                          name=name, config=experiment.provenance,
                          dir=str(args.output))
@@ -367,7 +383,7 @@ def train(args):
     atomic_json(args.output / 'runtime.json', dict(state='stopped' if stopping else 'complete', step=step))
 
 
-def main():
+def training_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ('config', 'wan-source', 'wan-checkpoint', 'output'):
         parser.add_argument(f'--{key}', type=Path, required=True)
@@ -378,15 +394,18 @@ def main():
     parser.add_argument('--stop-after', type=int)
     parser.add_argument('--fork-checkpoint', type=Path)
     parser.add_argument('--allow-atlas-change', action='store_true')
-    parser.add_argument('--adaptive-decoder', action='store_true')
-    parser.add_argument('--adaptive-body-scale', type=float, default=2.0,
-                        help='UV sampling multiplier for body, limb, and foot islands')
+    add_uv_arguments(parser)
     for key, default in (('rgb-weight', 0.8), ('lpips-weight', 1.0), ('ssim-weight', 0.2), ('mask-weight', 0.5)):
         parser.add_argument(f'--{key}', type=float, default=default)
     parser.add_argument('--entity', required=True)
-    args = parser.parse_args()
-    if args.adaptive_body_scale != 2.0 and not args.adaptive_decoder:
-        parser.error('--adaptive-body-scale requires --adaptive-decoder')
+    return parser
+
+
+def main():
+    parser = training_parser()
+    args = resolve_uv_arguments(parser, parser.parse_args())
+    if args.uv_representation == 'native-islands' and args.fork_checkpoint is not None:
+        parser.error('Native islands start from pretrained Wan and resume only their own output directory')
     if not os.getenv('SLURM_JOB_ID') or torch.cuda.device_count() != 1:
         raise RuntimeError('Run inside a Slurm step with one visible GPU')
     train(args)

@@ -40,6 +40,7 @@ class UVIsland(nn.Module):
 
     def __init__(self, mask, left, top, resolution):
         super().__init__()
+        self.register_buffer('valid_texels', torch.from_numpy(mask), persistent=False)
         height, width = mask.shape
         pad_height, pad_width = (-height) % 8, (-width) % 8
         padded = np.pad(mask, ((0, pad_height), (0, pad_width)))

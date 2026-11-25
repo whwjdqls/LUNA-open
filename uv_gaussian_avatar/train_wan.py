@@ -18,6 +18,7 @@ from luna_open.identity_v2_data import IdentityData
 from luna_open.official_mvh import atomic_json
 from luna_open.provenance import file_sha256
 
+from .adaptive_atlas import AdaptiveAtlas
 from .fit import (
     estimate_scales,
     load_rasterizer,
@@ -25,6 +26,7 @@ from .fit import (
     stack_views,
     vertex_transforms,
 )
+from .native_islands import NativeUVLayout, add_uv_arguments, resolve_uv_arguments
 from .representation import Atlas, PosedSurface
 from .visualize import as_rgb, panel
 from .wan_avatar import WanUVAvatar, animate_prediction, load_wan
@@ -140,13 +142,20 @@ def train(args):
     load_rasterizer(args.cuda_extension)
     print('Loading Wan2.2 TI2V and its frozen VAE', flush=True)
     backbone, vae, embedding = load_wan(args.wan_source, args.wan_checkpoint, args.wan_deps)
-    atlas = Atlas.from_smplx(args.asset, args.atlas_size).cuda()
+    if args.adaptive_decoder:
+        atlas = AdaptiveAtlas.from_smplx(args.asset, args.atlas_size, args.segmentation,
+                                       args.adaptive_body_scale).cuda()
+    else:
+        atlas = Atlas.from_smplx(args.asset, args.atlas_size).cuda()
     body = VertexSMPLX(args.asset, args.segmentation).cuda()
     neutral, _ = body.mesh(torch.zeros_like(body.canonical_pose),
                            body.anchors.new_zeros((1, 10)), body.anchors.new_zeros((1, 10)))
     base_log_scale = estimate_scales(args.asset, atlas, neutral[0]).log()
+    native = args.uv_representation == 'native-islands'
+    layout = NativeUVLayout(atlas, neutral[0], args.uv_patch_size) if native else None
     model = WanUVAvatar(backbone, vae, embedding, atlas, base_log_scale,
-                        side=args.query_side, rank=args.rank).cuda()
+                        side=args.query_side, rank=args.rank, image_side=args.image_side,
+                        native_layout=layout, canonical_3d_pos=args.canonical_3d_pos).cuda()
     weights = yaml.safe_load(args.lhm_loss_config.read_text())['loss']
     settings = {key: weights[key] for key in ('rgb', 'lpips')}
     print(f'Using LHM identity RGB losses from {args.lhm_loss_config}', flush=True)
@@ -205,7 +214,7 @@ def train(args):
         if not np.isfinite(changed) or changed <= 0:
             raise RuntimeError('The fitted UV RGB did not respond to a changed reference')
     report = dict(steps=args.steps, train_outfits=train_ids, held_out_outfits=val_ids, atlas_size=atlas.size,
-                  gaussians=len(atlas.pixels), query_side=args.query_side, rank=args.rank,
+                  gaussians=len(atlas.face_ids), query_side=args.query_side, rank=args.rank,
                   wan_blocks=len(backbone.blocks), adapter_targets=model.targets,
                   adapter_parameters=sum(p.numel() for p in adapter), projection_parameters=sum(p.numel() for p in projections),
                   reference_count=1, shape='supplied reference betas for render only',
@@ -218,6 +227,10 @@ def train(args):
                   peak_cuda_mib=torch.cuda.max_memory_allocated() // (1024**2),
                   gpu=torch.cuda.get_device_name(), slurm_job=os.getenv('SLURM_JOB_ID'),
                   protocol_sha256=file_sha256(args.protocol), smplx_sha256=file_sha256(args.asset))
+    if native:
+        report.update(uv_patch_size=layout.patch_size, uv_tokens=layout.num_tokens,
+                      image_tokens=model.image_side**2, native_layout=layout.stats,
+                      canonical_3d_pos=args.canonical_3d_pos)
     atomic_json(args.output / 'metrics.json', report)
     print(json.dumps({'initial': initial, 'final': metrics, 'fit_seconds': fit_seconds}), flush=True)
 
@@ -237,7 +250,8 @@ def main():
     parser.add_argument('--projection-lr', type=float, default=0.0003)
     parser.add_argument('--train-ids', nargs='+')
     parser.add_argument('--val-ids', nargs='+')
-    args = parser.parse_args()
+    add_uv_arguments(parser)
+    args = resolve_uv_arguments(parser, parser.parse_args())
     if not os.getenv('SLURM_JOB_ID') or torch.cuda.device_count() != 1:
         raise RuntimeError('Run inside a Slurm step with one visible GPU')
     if min(args.steps, args.atlas_size, args.query_side, args.rank, args.height, args.width) < 1:

@@ -15,7 +15,9 @@ from luna_open.geometry import normalize_quaternion
 from luna_open.lora import LoRALinear
 
 from .adaptive_atlas import AdaptiveAtlas
+from .native_islands import decoder_stages
 from .representation import pose_gaussians
+from .wan_rope import ExplicitWanRoPE, install_explicit_rope, native_wan_rope
 
 
 def dense_attention(q, k, v, *, k_lens=None, window_size=(-1, -1)):
@@ -43,6 +45,7 @@ def load_wan(source, checkpoints, dependencies=None):
     module = importlib.import_module('_wan_uv.modules.model')
     vae_module = importlib.import_module('_wan_uv.modules.vae2_2')
     module.flash_attention = dense_attention
+    install_explicit_rope(module)
     transformer = load_transformer_weights(module, checkpoints)
     if transformer.model_type != 'ti2v' or transformer.in_dim != 48:
         raise ValueError('Expected the Wan2.2 TI2V checkpoint with 48 VAE channels')
@@ -169,9 +172,35 @@ class AdaptiveUVHead(UVHead):
         return (base + torch.cat(residuals, dim=-1)).transpose(1, 2).contiguous()
 
 
+class NativeUVHead(nn.Module):
+    """Direct Gaussian prediction from compact tokens, with one CNN shared by all charts."""
+
+    def __init__(self, hidden, patch_size):
+        super().__init__()
+        self.projection = nn.Linear(hidden, 256)
+        blocks = []
+        width = 256
+        for out_channels in decoder_stages(patch_size):
+            blocks.append(IslandUpsample(width, out_channels))
+            width = out_channels
+        self.cnn = nn.Sequential(*blocks, nn.GroupNorm(8, width), nn.SiLU(), nn.Conv2d(width, 14, 1))
+        nn.init.normal_(self.cnn[-1].weight, std=0.002)
+        nn.init.zeros_(self.cnn[-1].bias)
+
+    def forward(self, queries, layout):
+        projected = self.projection(queries)
+        parts = []
+        for j, island in enumerate(layout.islands):
+            start, end = layout.token_offsets[j:j + 2]
+            patch_grid = island.scatter(projected[:, start:end])
+            parts.append(island.gather(self.cnn(patch_grid)))
+        return torch.cat(parts, dim=1).float()
+
+
 class WanUVAvatar(nn.Module):
     def __init__(self, backbone, vae, time_embedding, atlas, base_log_scale,
-                 side=16, rank=8, query_timestep=500):
+                 side=16, rank=8, query_timestep=500, *, image_side=None, native_layout=None,
+                 canonical_3d_pos=False):
         super().__init__()
         self.backbone = backbone.requires_grad_(False)
         self.atlas = atlas
@@ -182,12 +211,29 @@ class WanUVAvatar(nn.Module):
         self.vae_model = vae.model.requires_grad_(False)
         self.time_embedding = time_embedding
         self.side = side
+        self.image_side = side if image_side is None else image_side
+        self.native_layout = native_layout
+        if native_layout is None and (self.image_side != side or canonical_3d_pos):
+            raise ValueError('Legacy Wan UV requires a shared image/query side and no canonical encoding')
         self.query_timestep = query_timestep
         self.targets = attach_lora(backbone, rank)
-        self.queries = nn.Parameter(torch.randn(side * side, 256) * 0.02)
+        num_queries = side * side if native_layout is None else native_layout.num_tokens
+        self.queries = nn.Parameter(torch.randn(num_queries, 256) * 0.02)
         self.query_projection = nn.Sequential(nn.Linear(256, backbone.dim), nn.LayerNorm(backbone.dim))
         self.image_context = nn.Sequential(nn.LayerNorm(backbone.dim), nn.Linear(backbone.dim, backbone.dim))
-        if isinstance(atlas, AdaptiveAtlas):
+        if native_layout is not None:
+            self.token_island_embedding = nn.Embedding(len(native_layout.islands), 256)
+            self.token_uv_projection = nn.Linear(4, 256, bias=False)
+            nn.init.normal_(self.token_island_embedding.weight, std=0.02)
+            nn.init.normal_(self.token_uv_projection.weight, std=0.02)
+            coords, phases = native_wan_rope(backbone.freqs, self.image_side, native_layout.global_uv)
+            self.register_buffer('token_rope_coordinates', coords, persistent=False)
+            self.register_buffer('token_rope_phases', phases, persistent=False)
+            self.head = NativeUVHead(backbone.dim, native_layout.patch_size)
+            self.token_xyz_projection = nn.Linear(3, 256, bias=False) if canonical_3d_pos else None
+            if self.token_xyz_projection is not None:
+                nn.init.zeros_(self.token_xyz_projection.weight)
+        elif isinstance(atlas, AdaptiveAtlas):
             self.head = AdaptiveUVHead(backbone.dim, len(atlas.islands))
         else:
             self.head = UVHead(backbone.dim)
@@ -201,35 +247,52 @@ class WanUVAvatar(nn.Module):
         square = max(h, w)
         x, y = (square - w) // 2, (square - h) // 2
         image = F.pad(image, (x, square - w - x, y, square - h - y), value=1)
-        size = self.side * 32  # Wan2.2 VAE stride 16 and DiT patch stride 2
+        size = self.image_side * 32  # Wan2.2 VAE stride 16 and DiT patch stride 2
         image = F.interpolate(image[None], size=(size, size), mode='bilinear', align_corners=False, antialias=True)[0]
         latent = self.vae.encode([(image * 2 - 1).unsqueeze(1)])[0]
-        if latent.shape != (48, 1, self.side * 2, self.side * 2):
+        if latent.shape != (48, 1, self.image_side * 2, self.image_side * 2):
             raise RuntimeError(f'Unexpected Wan VAE image shape {tuple(latent.shape)}')
         return latent
 
     def forward(self, latent):
-        # Both planes use a dense equal-size grid. The temporal RoPE position
-        # distinguishes the image tokens (plane 0) from UV queries (plane 1).
+        single = latent.ndim == 4
+        if single:
+            latent = latent.unsqueeze(0)
         backbone = self.backbone
-        n = self.side**2
-        with torch.autocast('cuda', dtype=torch.bfloat16):
-            image = backbone.patch_embedding(latent.unsqueeze(0)).flatten(2).transpose(1, 2)
-            queries = self.query_projection(self.queries)[None]
+        n = self.image_side**2
+        batch = len(latent)
+        with torch.autocast('cuda', dtype=torch.bfloat16, enabled=latent.is_cuda):
+            image = backbone.patch_embedding(latent).flatten(2).transpose(1, 2)
+            if image.shape[1] != n:
+                raise ValueError('Wan image token geometry differs from the configured image lattice')
+            seed = self.queries
+            if self.native_layout is not None:
+                layout = self.native_layout
+                uv = torch.cat((layout.global_uv, layout.local_uv), dim=-1) * 2 - 1
+                seed = seed + self.token_island_embedding(layout.island_ids) + self.token_uv_projection(uv)
+                if self.token_xyz_projection is not None:
+                    seed = seed + self.token_xyz_projection(layout.normalized_xyz)
+            queries = self.query_projection(seed)[None].expand(batch, -1, -1)
             x = torch.cat([image, queries], dim=1)
             context = self.image_context(image)
+        length = x.shape[1]
         with torch.no_grad(), torch.autocast('cuda', enabled=False):
-            timestep = torch.full((2 * n,), self.query_timestep, device=x.device)
+            timestep = torch.full((length,), self.query_timestep, device=x.device)
             timestep[:n] = 0
             e = backbone.time_embedding(self.time_embedding(backbone.freq_dim, timestep).float()[None])
             modulation = backbone.time_projection(e).unflatten(2, (6, backbone.dim))
-        grids = torch.tensor([[2, self.side, self.side]])
-        lengths = torch.tensor([2 * n])
+        grids = (ExplicitWanRoPE(self.token_rope_phases) if self.native_layout is not None
+                 else torch.tensor([[2, self.side, self.side]]).expand(batch, -1))
+        lengths = torch.full((batch,), length)
         freqs = backbone.freqs.to(x.device)
-        with torch.autocast('cuda', dtype=torch.bfloat16):
+        with torch.autocast('cuda', dtype=torch.bfloat16, enabled=latent.is_cuda):
             for block in backbone.blocks:
                 x = block(x, modulation, lengths, grids, freqs, context, None)
-            raw = self.head(backbone.head.norm(x[:, n:]), self.side, self.atlas)[0]
+            tokens = backbone.head.norm(x[:, n:])
+            raw = (self.head(tokens, self.native_layout) if self.native_layout is not None
+                   else self.head(tokens, self.side, self.atlas))
+        if single:
+            raw = raw[0]
         offset, q, log_scale, opacity, color = raw.split((3, 4, 3, 1, 3), dim=-1)
         identity = q.new_tensor([1.0, 0.0, 0.0, 0.0])
         return dict(

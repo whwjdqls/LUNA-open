@@ -302,3 +302,5 @@ The experiment's launcher records the Slurm and training commands under
 [ARG-Avatar, Appendix C](https://arxiv.org/pdf/2611.22207#page=14)
 
 [Wan2.2](https://github.com/Wan-Video/Wan2.2)
+
+The canonical geometry ablation, equations, configuration flags and launch commands are in [Native UV canonical geometry](canonical_geometry.md).

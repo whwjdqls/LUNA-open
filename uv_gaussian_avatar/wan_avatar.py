@@ -2,7 +2,6 @@
 
 import importlib
 import json
-import math
 import sys
 from types import ModuleType
 
@@ -11,10 +10,10 @@ from safetensors import safe_open
 from torch import nn
 from torch.nn import functional as F
 
-from luna_open.geometry import normalize_quaternion
 from luna_open.lora import LoRALinear
 
 from .adaptive_atlas import AdaptiveAtlas
+from .canonical_geometry import activate
 from .native_islands import decoder_stages
 from .representation import pose_gaussians
 from .wan_rope import ExplicitWanRoPE, install_explicit_rope, native_wan_rope
@@ -173,9 +172,9 @@ class AdaptiveUVHead(UVHead):
 
 
 class NativeUVHead(nn.Module):
-    """Direct Gaussian prediction from compact tokens, with one CNN shared by all charts."""
+    """Shared chart CNN and optional token-level canonical displacement head."""
 
-    def __init__(self, hidden, patch_size):
+    def __init__(self, hidden, patch_size, *, coarse_to_fine=False, coarse_range=.135):
         super().__init__()
         self.projection = nn.Linear(hidden, 256)
         blocks = []
@@ -187,6 +186,13 @@ class NativeUVHead(nn.Module):
         nn.init.normal_(self.cnn[-1].weight, std=0.002)
         nn.init.zeros_(self.cnn[-1].bias)
 
+        self.coarse_range = coarse_range
+        self.coarse_head = None
+        if coarse_to_fine:
+            self.coarse_head = nn.Sequential(nn.Linear(hidden, 64), nn.SiLU(), nn.Linear(64, 3))
+            nn.init.normal_(self.coarse_head[-1].weight, std=.0002)
+            nn.init.zeros_(self.coarse_head[-1].bias)
+
     def forward(self, queries, layout):
         projected = self.projection(queries)
         parts = []
@@ -194,13 +200,16 @@ class NativeUVHead(nn.Module):
             start, end = layout.token_offsets[j:j + 2]
             patch_grid = island.scatter(projected[:, start:end])
             parts.append(island.gather(self.cnn(patch_grid)))
-        return torch.cat(parts, dim=1).float()
+        raw = torch.cat(parts, dim=1).float()
+        if self.coarse_head is None:
+            return raw
+        return raw, self.coarse_range * self.coarse_head(queries).float().tanh()
 
 
 class WanUVAvatar(nn.Module):
     def __init__(self, backbone, vae, time_embedding, atlas, base_log_scale,
                  side=16, rank=8, query_timestep=500, *, image_side=None, native_layout=None,
-                 canonical_3d_pos=False):
+                 canonical_3d_pos=False, geometry=None, coarse_to_fine=False, coarse_range=.135, fine_range=.015):
         super().__init__()
         self.backbone = backbone.requires_grad_(False)
         self.atlas = atlas
@@ -213,6 +222,10 @@ class WanUVAvatar(nn.Module):
         self.side = side
         self.image_side = side if image_side is None else image_side
         self.native_layout = native_layout
+        self.geometry = geometry
+        self.fine_range = fine_range
+        if coarse_to_fine and (native_layout is None or geometry is None):
+            raise ValueError('Coarse-to-fine decoding requires native mesh correspondence')
         if native_layout is None and (self.image_side != side or canonical_3d_pos):
             raise ValueError('Legacy Wan UV requires a shared image/query side and no canonical encoding')
         self.query_timestep = query_timestep
@@ -229,7 +242,8 @@ class WanUVAvatar(nn.Module):
             coords, phases = native_wan_rope(backbone.freqs, self.image_side, native_layout.global_uv)
             self.register_buffer('token_rope_coordinates', coords, persistent=False)
             self.register_buffer('token_rope_phases', phases, persistent=False)
-            self.head = NativeUVHead(backbone.dim, native_layout.patch_size)
+            self.head = NativeUVHead(backbone.dim, native_layout.patch_size,
+                                     coarse_to_fine=coarse_to_fine, coarse_range=coarse_range)
             self.token_xyz_projection = nn.Linear(3, 256, bias=False) if canonical_3d_pos else None
             if self.token_xyz_projection is not None:
                 nn.init.zeros_(self.token_xyz_projection.weight)
@@ -254,7 +268,7 @@ class WanUVAvatar(nn.Module):
             raise RuntimeError(f'Unexpected Wan VAE image shape {tuple(latent.shape)}')
         return latent
 
-    def forward(self, latent):
+    def forward(self, latent, *, return_aux=False):
         single = latent.ndim == 4
         if single:
             latent = latent.unsqueeze(0)
@@ -291,17 +305,16 @@ class WanUVAvatar(nn.Module):
             tokens = backbone.head.norm(x[:, n:])
             raw = (self.head(tokens, self.native_layout) if self.native_layout is not None
                    else self.head(tokens, self.side, self.atlas))
+        token_offsets = None
+        if isinstance(raw, tuple):
+            raw, token_offsets = raw
         if single:
             raw = raw[0]
-        offset, q, log_scale, opacity, color = raw.split((3, 4, 3, 1, 3), dim=-1)
-        identity = q.new_tensor([1.0, 0.0, 0.0, 0.0])
-        return dict(
-            offset=offset.tanh() * 0.15,
-            quaternion=normalize_quaternion(q + identity),
-            log_scale=(self.base_log_scale + 3 * log_scale.tanh()).clamp(math.log(0.0004), math.log(0.045)),
-            opacity_logit=opacity + 1.1,
-            rgb=color.sigmoid(),
-        )
+            if token_offsets is not None:
+                token_offsets = token_offsets[0]
+        fields, aux = activate(raw, self.base_log_scale, token_offsets=token_offsets,
+                               geometry=self.geometry, fine_range=self.fine_range)
+        return (fields, aux) if return_aux else fields
 
     def trainable_state(self):
         return {name: p.detach().cpu() for name, p in self.named_parameters() if p.requires_grad}

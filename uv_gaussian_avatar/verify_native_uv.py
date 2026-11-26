@@ -15,9 +15,11 @@ import torch
 import yaml
 from PIL import Image, ImageDraw
 
+from luna_open.identity_rgb import learning_rate
 from luna_open.official_mvh import atomic_json
 
 from .fit import load_rasterizer
+from .geometry_monitor import OUTFITS, monitor, observations
 from .native_islands import resolve_uv_arguments
 from .train_wan import check_gradients
 from .train_wan_mvh import Experiment, training_parser
@@ -163,7 +165,11 @@ def main():
     parser = training_parser()
     parser.add_argument('--legacy-anchor-receipt', type=Path, required=True)
     parser.add_argument('--smoke-steps', type=int, default=4)
+    parser.add_argument('--matched-updates', action='store_true',
+                        help='Use the production LR and sample stream and measure four fixed validation outfits')
     args = resolve_uv_arguments(parser, parser.parse_args())
+    if args.matched_updates:
+        args.geometry_monitor = True
     if args.uv_representation != 'native-islands' or args.fork_checkpoint or args.smoke_steps < 2:
         parser.error('The gate requires native islands from scratch and at least two smoke updates')
     if torch.cuda.device_count() != 1:
@@ -190,21 +196,45 @@ def main():
         optimizer = torch.optim.AdamW(parameters.values(), lr=settings['learning_rate'],
                                       betas=settings['betas'], weight_decay=settings['weight_decay'], fused=True)
         updates = []
+        rng = random.Random(cfg['seed'])
+        targets = {outfit: observations(experiment, outfit, experiment.fixed[outfit]['targets'])
+                   for outfit in OUTFITS} if args.matched_updates else {}
+
+        def evaluate(step):
+            for outfit, (reference, batches) in targets.items():
+                with torch.no_grad():
+                    fields, aux = model(model.encode_image(reference), return_aux=True)
+                monitor(experiment, fields, aux, batches, args.output/f'eval-{step:04d}'/outfit)
+
+        if args.matched_updates:
+            evaluate(0)
         for step in range(1, args.smoke_steps + 1):
             tick = time.monotonic()
             optimizer.zero_grad(set_to_none=True)
-            terms, renders, choices = experiment.train_update(random.Random(cfg['seed']))
+            if args.matched_updates:
+                optimizer.param_groups[0]['lr'] = learning_rate(step, settings)
+            terms, renders, choices = experiment.train_update(rng if args.matched_updates else random.Random(cfg['seed']))
             grads = check_gradients(model, step)
             norm = torch.nn.utils.clip_grad_norm_(parameters.values(), settings['gradient_clip'],
                                                   error_if_nonfinite=True).item()
             optimizer.step()
-            row = dict(step=step, total=sum(experiment.weights[k] * v for k, v in terms.items()),
+            row = dict(step=step, total=sum(experiment.loss_weights[k] * v for k, v in terms.items()),
                        terms=terms, renders=renders, gradients=grads, gradient_norm=norm,
                        seconds=time.monotonic() - tick)
             assert math.isfinite(row['total']) and renders == 64
+            row.update(weighted={k: v * experiment.loss_weights[k] for k, v in terms.items()},
+                       lr=optimizer.param_groups[0]['lr'], choices=choices)
             updates.append(row)
+            if args.matched_updates:
+                with (args.output/'training.jsonl').open('a') as file:
+                    file.write(json.dumps(row, allow_nan=False) + '\n')
+                if step in {args.smoke_steps//2, args.smoke_steps}:
+                    evaluate(step)
             print(json.dumps(row), flush=True)
         assert not torch.equal(model.queries, start_queries)
+        if args.matched_updates:
+            torch.save(dict(trainable=model.trainable_state(), step=args.smoke_steps,
+                            provenance=experiment.provenance), args.output/'endpoint.pt')
         attribute_previews(experiment, image)
         report = dict(passed=True, sequence=sequence, updates=updates,
                       outfit_choices=choices, provenance=experiment.provenance,

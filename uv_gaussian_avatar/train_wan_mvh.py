@@ -36,7 +36,16 @@ from luna_open.perceptual import build_lpips
 from luna_open.provenance import file_sha256
 
 from .adaptive_atlas import AdaptiveAtlas
+from .canonical_geometry import (
+    SCALE_LOWER,
+    SCALE_UPPER,
+    CanonicalGeometry,
+    add_geometry_arguments,
+    geometry_weights,
+    update_regularizers,
+)
 from .fit import estimate_scales, load_rasterizer, render, stack_views, vertex_transforms
+from .geometry_monitor import OUTFITS, monitor, pose_batches
 from .native_islands import NativeUVLayout, add_uv_arguments, resolve_uv_arguments
 from .representation import Atlas, PosedSurface
 from .train_wan import check_gradients
@@ -44,7 +53,16 @@ from .visualize import as_rgb, panel
 from .wan_avatar import WanUVAvatar, animate_prediction, load_wan
 
 
-class Experiment:
+def render_terms(rgb, alpha, target, perceptual):
+    pred = rgb.permute(0, 3, 1, 2)
+    truth = target['rgb'].permute(0, 3, 1, 2)
+    components = identity_rgb_terms(pred, truth, target['mask'].permute(0, 3, 1, 2), perceptual)
+    components['ssim'] = 1 - checkpoint(ssim, pred, truth, use_reentrant=False).mean()
+    components['mask'] = (alpha - target['mask']).abs().mean()
+    return components
+
+
+class CaptureProtocol:
     def __init__(self, args, cfg):
         self.args = args
         self.cfg = cfg
@@ -86,37 +104,18 @@ class Experiment:
                                     self.body.anchors.new_zeros((1, 10)))
         base_scale = estimate_scales(self.asset, self.atlas, neutral[0])
         layout = NativeUVLayout(self.atlas, neutral[0], args.uv_patch_size) if native else None
-        backbone, vae, embedding = load_wan(args.wan_source, args.wan_checkpoint, args.wan_deps)
-        self.model = WanUVAvatar(backbone, vae, embedding, self.atlas, base_scale.log(),
-                                 side=args.query_side, rank=args.rank,
-                                 image_side=getattr(args, 'image_side', None), native_layout=layout,
-                                 canonical_3d_pos=getattr(args, 'canonical_3d_pos', False)).cuda()
+        self.layout = layout.cuda() if layout is not None else None
+        self.base_log_scale = base_scale.log()
+        self.reg_weights = geometry_weights(args)
+        self.geometry = None
+        if getattr(args, 'coarse_to_fine', False) or any(self.reg_weights.values()) or getattr(args, 'geometry_monitor', False):
+            self.geometry = CanonicalGeometry(self.atlas, layout, neutral[0], self.body.body.faces).cuda()
+        self.protocol_hash = protocol_hash
+        self.fixed_hash, self.front_hash = file_sha256(val_path), file_sha256(front_path)
+
+    def build_perceptual(self):
         self.perceptual = build_identity_train_perceptual()
         self.eval_perceptual = build_lpips()
-        self.provenance = dict(config_sha256=file_sha256(args.config), protocol_sha256=protocol_hash,
-                               fixed_validation_sha256=file_sha256(val_path), front_cameras_sha256=file_sha256(front_path),
-                               checkpoint_index_sha256=file_sha256(args.wan_checkpoint / 'diffusion_pytorch_model.safetensors.index.json'),
-                               wan_config_sha256=file_sha256(args.wan_checkpoint / 'config.json'),
-                               model_source_sha256=file_sha256(args.wan_source / 'wan/modules/model.py'),
-                               smplx_sha256=file_sha256(self.asset), rank=args.rank, query_side=args.query_side,
-                               gaussians=len(self.atlas.face_ids), atlas_size=args.atlas_size, reference_count=1,
-                               train_outfits=len(self.data['train'].ids), validation_outfits=len(self.fixed),
-                               training=self.train_settings, render_size=self.size, loss_weights=self.weights,
-                               loss_reduction='GT-masked full-canvas RGB L1, full-crop VGG LPIPS and 1-SSIM, alpha L1',
-                               evaluation_perceptual='LPIPS-Alex', shape='supplied SMPL-X for rendering only',
-                               first_full_validation=args.first_validation)
-        if adaptive:
-            self.provenance.update(adaptive_decoder=True, islands=self.atlas.island_stats,
-                                   segmentation_sha256=file_sha256(segmentation))
-            if body_scale != 2.0:
-                self.provenance['adaptive_body_scale'] = body_scale
-        if native:
-            self.provenance.update(
-                uv_representation='native-islands', uv_patch_size=layout.patch_size,
-                image_side=self.model.image_side, image_tokens=self.model.image_side**2,
-                uv_tokens=layout.num_tokens, canonical_3d_pos=args.canonical_3d_pos,
-                native_layout=layout.stats, rope='wan-t1-fractional-global-uv-scaled-to-image-side-minus-one',
-            )
 
     @torch.no_grad()
     def load_outfit(self, split, outfit, reference, stamps, observations):
@@ -131,40 +130,6 @@ class Experiment:
         images = list(self.pool.map(lambda pair: data.target(outfit, *pair), observations))
         return reference['body'].cuda(), surfaces, images
 
-    def train_update(self, rng):
-        cfg = self.train_settings
-        selected = rng.sample(self.data['train'].ids, cfg['outfits_per_gpu'])
-        terms = dict.fromkeys(self.weights, 0.0)
-        renders = 0
-        choices = []
-        for outfit in selected:
-            data = self.data['train']
-            reference = sample_references(data, outfit, 1, self.front, self.detector, rng)
-            stamps, observations = sample_targets(data, outfit, reference, cfg['target_frames'], cfg['target_cameras'], rng)
-            image, surfaces, views = self.load_outfit('train', outfit, reference[0], stamps, observations)
-            prediction = self.model(self.model.encode_image(image))
-            terms_img = dict.fromkeys(self.weights, 0.0)
-            for i, stamp in enumerate(stamps):
-                target = stack_views([v for v in views if v['observation'][1] == stamp])
-                posed = PosedSurface(surfaces.anchors[i], surfaces.rotation[i])
-                rgb, alpha = render(animate_prediction(prediction, posed), target, self.size)
-                rgb_chw = rgb.permute(0, 3, 1, 2)
-                truth = target['rgb'].permute(0, 3, 1, 2)
-                components = identity_rgb_terms(rgb_chw, truth, target['mask'].permute(0, 3, 1, 2), self.perceptual)
-                components['ssim'] = 1 - checkpoint(ssim, rgb_chw, truth, use_reentrant=False).mean()
-                components['mask'] = (alpha - target['mask']).abs().mean()
-                for key, value in components.items():
-                    terms_img[key] = terms_img[key] + value / (len(stamps) * len(selected))
-                renders += len(rgb)
-            # Identical equal-outfit objective to the original batch, with
-            # each outfit graph released before loading the next outfit.
-            loss = sum(self.weights[key] * value for key, value in terms_img.items())
-            loss.backward()
-            for key, value in terms_img.items():
-                terms[key] += value.detach().item()
-            choices.append(dict(outfit=outfit, reference=reference[0]['observation'], targets=observations))
-        return terms, renders, choices
-
     def fixed_reference(self, outfit, item):
         camera, stamp = item['camera'], item['time']
         raw = self.data['val'].raw(outfit, camera, stamp)
@@ -172,6 +137,84 @@ class Experiment:
             raise ValueError(f'Fixed validation reference changed for {outfit}')
         body = warp(raw['rgb'], raw['alpha'], portrait_box(raw['alpha'], self.input_size), self.input_size)['rgb']
         return dict(observation=(camera, stamp), body=body)
+
+
+class Experiment(CaptureProtocol):
+    def __init__(self, args, cfg):
+        super().__init__(args, cfg)
+        layout, body_scale = self.layout, getattr(args, 'adaptive_body_scale', 2.)
+        backbone, vae, embedding = load_wan(args.wan_source, args.wan_checkpoint, args.wan_deps)
+        self.model = WanUVAvatar(backbone, vae, embedding, self.atlas, self.base_log_scale,
+                                 side=args.query_side, rank=args.rank,
+                                 image_side=getattr(args, 'image_side', None), native_layout=layout,
+                                 canonical_3d_pos=getattr(args, 'canonical_3d_pos', False),
+                                 geometry=self.geometry, coarse_to_fine=getattr(args, 'coarse_to_fine', False),
+                                 coarse_range=getattr(args, 'coarse_range', .135), fine_range=getattr(args, 'fine_range', .015)).cuda()
+        self.build_perceptual()
+        self.provenance = dict(config_sha256=file_sha256(args.config), protocol_sha256=self.protocol_hash,
+                               fixed_validation_sha256=self.fixed_hash, front_cameras_sha256=self.front_hash,
+                               checkpoint_index_sha256=file_sha256(args.wan_checkpoint / 'diffusion_pytorch_model.safetensors.index.json'),
+                               wan_config_sha256=file_sha256(args.wan_checkpoint / 'config.json'),
+                               model_source_sha256=file_sha256(args.wan_source / 'wan/modules/model.py'),
+                               smplx_sha256=file_sha256(self.asset), rank=args.rank, query_side=args.query_side,
+                               gaussians=len(self.atlas.face_ids), atlas_size=args.atlas_size, reference_count=1,
+                               train_outfits=len(self.data['train'].ids), validation_outfits=len(self.fixed),
+                               training=self.train_settings, render_size=self.size, loss_weights=self.weights,
+                               loss_reduction='GT-masked full-canvas RGB L1, full-crop VGG LPIPS and 1-SSIM, alpha L1',
+                               evaluation_perceptual='LPIPS-Alex', shape='supplied SMPL-X for rendering only',
+                               first_full_validation=args.first_validation)
+        if isinstance(self.atlas, AdaptiveAtlas):
+            self.provenance.update(adaptive_decoder=True, islands=self.atlas.island_stats,
+                                   segmentation_sha256=file_sha256(Path(cfg['assets']['segmentation'])))
+            if body_scale != 2.0:
+                self.provenance['adaptive_body_scale'] = body_scale
+        if layout is not None:
+            self.provenance.update(
+                uv_representation='native-islands', uv_patch_size=layout.patch_size,
+                image_side=self.model.image_side, image_tokens=self.model.image_side**2,
+                uv_tokens=layout.num_tokens, canonical_3d_pos=args.canonical_3d_pos,
+                native_layout=layout.stats, rope='wan-t1-fractional-global-uv-scaled-to-image-side-minus-one',
+            )
+
+        if getattr(args, 'coarse_to_fine', False) or any(self.reg_weights.values()):
+            self.provenance['canonical_geometry'] = dict(version=2, weights=self.reg_weights,
+                scale_relative_log_bounds=[SCALE_LOWER, SCALE_UPPER],
+                coarse_to_fine=args.coarse_to_fine, coarse_range=args.coarse_range, fine_range=args.fine_range)
+        self.loss_weights = {**self.weights, **self.reg_weights}
+
+    def train_update(self, rng):
+        cfg = self.train_settings
+        selected = rng.sample(self.data['train'].ids, cfg['outfits_per_gpu'])
+        terms = {}
+        renders = 0
+        choices = []
+        for outfit in selected:
+            data = self.data['train']
+            reference = sample_references(data, outfit, 1, self.front, self.detector, rng)
+            stamps, observations = sample_targets(data, outfit, reference, cfg['target_frames'], cfg['target_cameras'], rng)
+            image, surfaces, views = self.load_outfit('train', outfit, reference[0], stamps, observations)
+            prediction, aux = self.model(self.model.encode_image(image), return_aux=True)
+            terms_img = dict.fromkeys(self.weights, 0.0)
+            for i, stamp in enumerate(stamps):
+                target = stack_views([v for v in views if v['observation'][1] == stamp])
+                posed = PosedSurface(surfaces.anchors[i], surfaces.rotation[i])
+                rgb, alpha = render(animate_prediction(prediction, posed), target, self.size)
+                components = render_terms(rgb, alpha, target, self.perceptual)
+                for key, value in components.items():
+                    terms_img[key] = terms_img[key] + value / (len(stamps) * len(selected))
+                renders += len(rgb)
+            # Identical equal-outfit objective to the original batch, with
+            # each outfit graph released before loading the next outfit.
+            if self.geometry is not None:
+                regularizers = update_regularizers(self.geometry, prediction, aux, self.reg_weights)
+                terms_img.update({k: v / len(selected) for k, v in regularizers.items()})
+            loss = sum(self.loss_weights[key] * value for key, value in terms_img.items()
+                       if key in self.weights or self.loss_weights[key])
+            loss.backward()
+            for key, value in terms_img.items():
+                terms[key] = terms.get(key, 0.) + value.detach().item()
+            choices.append(dict(outfit=outfit, reference=reference[0]['observation'], targets=observations))
+        return terms, renders, choices
 
     @torch.no_grad()
     def validate(self, step, tracker, full):
@@ -187,7 +230,14 @@ class Experiment:
             observations = chosen['targets']
             stamps = list(dict.fromkeys(pair[1] for pair in observations))
             image, surfaces, views = self.load_outfit('val', outfit, reference, stamps, observations)
-            fields = self.model.predict_image(image)
+            if getattr(self.args, 'geometry_monitor', False) and outfit in OUTFITS:
+                fields, aux = self.model(self.model.encode_image(image), return_aux=True)
+                geometry_metrics = monitor(self, fields, aux, pose_batches(surfaces, views, stamps),
+                                           folder/'geometry'/outfit, native_maps=full)
+                tracker.log({'optimizer_step': step, **{f'geometry/{outfit}/{k}': v for k, v in geometry_metrics.items()
+                                                       if isinstance(v, (int, float))}})
+            else:
+                fields = self.model.predict_image(image)
             captured, predicted = [], []
             for i, stamp in enumerate(stamps):
                 frames = [view for view in views if view['observation'][1] == stamp]
@@ -327,6 +377,10 @@ def train(args):
         name = f'wan22-ti2v-5b-native-uv-patch{args.uv_patch_size}'
         if args.canonical_3d_pos:
             name += '-canonical-xyz'
+    if getattr(args, 'coarse_to_fine', False):
+        name += '-coarse-fine'
+    if any(experiment.reg_weights.values()):
+        name += '-regularized'
     tracker = wandb.init(entity=args.entity, project=project, id=id_, resume='allow', mode='online',
                          name=name, config=experiment.provenance,
                          dir=str(args.output))
@@ -355,8 +409,9 @@ def train(args):
                 atomic_json(args.output / f'gradient-step-{step}.json', check_gradients(model, step))
             grad = torch.nn.utils.clip_grad_norm_(params, settings['gradient_clip'], error_if_nonfinite=True).item()
             optimizer.step()
-            total = sum(value * experiment.weights[key] for key, value in terms.items())
-            log = dict(step=step, total=total, terms=terms, renders=renders, learning_rate=lr,
+            weighted = {k: v * experiment.loss_weights[k] for k, v in terms.items()}
+            total = sum(weighted.values())
+            log = dict(step=step, total=total, terms=terms, weighted=weighted, renders=renders, learning_rate=lr,
                        gradient_norm=grad, seconds=time.monotonic() - tick, choices=choices)
             with (args.output / 'training.jsonl').open('a') as file:
                 file.write(json.dumps(log, allow_nan=False) + '\n')
@@ -365,7 +420,8 @@ def train(args):
             print(json.dumps(brief), flush=True)
             tracker.log({'optimizer_step': step, 'train/loss': total, 'train/renders': renders,
                          'train/lr': lr, 'train/gradient_norm': grad,
-                         **{f'loss/raw/{k}': v for k, v in terms.items()}})
+                         **{f'loss/raw/{k}': v for k, v in terms.items()},
+                         **{f'loss/weighted/{k}': v for k, v in weighted.items()}})
             if step in (1, (fork_step or 0) + 1) or step % settings['checkpoint_every'] == 0 or full_validation(step) or stopping:
                 path = save_checkpoint(checkpoints, model, optimizer, rng, step, experiment.provenance)
                 atomic_json(args.output / 'latest-checkpoint.json', dict(step=step, path=str(path)))
@@ -395,6 +451,8 @@ def training_parser():
     parser.add_argument('--fork-checkpoint', type=Path)
     parser.add_argument('--allow-atlas-change', action='store_true')
     add_uv_arguments(parser)
+    add_geometry_arguments(parser)
+    parser.add_argument('--geometry-monitor', action='store_true')
     for key, default in (('rgb-weight', 0.8), ('lpips-weight', 1.0), ('ssim-weight', 0.2), ('mask-weight', 0.5)):
         parser.add_argument(f'--{key}', type=float, default=default)
     parser.add_argument('--entity', required=True)
@@ -404,6 +462,9 @@ def training_parser():
 def main():
     parser = training_parser()
     args = resolve_uv_arguments(parser, parser.parse_args())
+    if args.geometry_monitor and args.uv_representation != 'native-islands':
+        parser.error('Geometry monitoring requires native islands')
+    geometry_weights(args)
     if args.uv_representation == 'native-islands' and args.fork_checkpoint is not None:
         parser.error('Native islands start from pretrained Wan and resume only their own output directory')
     if not os.getenv('SLURM_JOB_ID') or torch.cuda.device_count() != 1:
